@@ -1,0 +1,758 @@
+bundle:
+  name: BenchMe MVP schema bundle
+  version: 0.1.0
+  research_date: '2026-07-10'
+  status: implementation-ready draft; examples, not a published compatibility promise
+  primary_unit: model-harness-context-tools-permissions-budget-environment-verifier-trial configuration
+  source_report: BENCHME_CODING_BENCHMARKS_RESEARCH_DOSSIER_2026-07-10.md
+evaluation_doctrine:
+  tracks_must_remain_separate:
+  - id: native_product
+    question: What does a buyer get from the product under a declared normal configuration?
+    allowed_variation:
+    - native prompt/context policy
+    - native tools
+    - native edit/recovery protocol
+    valid_claim: Configuration A outperformed B under these native-product conditions.
+  - id: fixed_harness_model
+    question: Which model performs best inside one pinned harness and tool contract?
+    allowed_variation:
+    - model/provider
+    - strictly required model adapter or chat template
+    valid_claim: Within harness H version V, model M1 outperformed M2.
+  - id: controlled_intervention
+    question: What is the effect of one named prompt/context/tool/recovery intervention?
+    allowed_variation:
+    - one preregistered intervention
+    valid_claim: Intervention I changed outcomes under configuration C.
+  - id: augmentation
+    question: Does a BenchMe-supplied context or tool layer improve a declared baseline?
+    allowed_variation:
+    - versioned BenchMe context pack
+    - versioned BenchMe tools
+    valid_claim: BenchMe augmentation improved or degraded baseline C.
+  - id: live_outcome
+    question: Do offline predictions transfer to accepted changes and real review/CI outcomes?
+    allowed_variation:
+    - deployment policy as preregistered
+    valid_claim: The deployed policy changed measured outcomes under the pilot design.
+  never_collapse_into_one_score:
+  - verified task success
+  - consistency
+  - wall time
+  - cost
+  - regressions
+  - policy violations
+  - diff risk
+  - human review burden
+  - operational failure rate
+  minimum_controls:
+  - base negative control
+  - reference positive control
+  - regression suite
+  - no-op or adversarial negative where practical
+  - alternate-solution positive where practical
+task_capsule:
+  schema_version: benchme.task_capsule.v0.1
+  required_fields:
+  - capsule_id
+  - capsule_version
+  - provenance
+  - repository
+  - task
+  - environment_ref
+  - agent_visible
+  - oracle
+  - controls
+  - information_policy
+  - risk
+  - validation
+  - artifact_hashes
+  example:
+    capsule_id: itsdangerous-fallback-salts-001
+    capsule_version: 2
+    status: validated
+    provenance:
+      kind: fresh_unpublished_task_on_public_repo
+      source_url: null
+      authored_at: '2026-07-09T00:00:00Z'
+      temporal_cutoff: '2026-07-09T00:00:00Z'
+      authoring_method: human_authored
+      solution_shape_reviewed_for_leakage: true
+      notes:
+      - Public repository familiarity remains possible; exact task and patch were not public.
+    repository:
+      display_id: pallets/itsdangerous
+      base_sha: 672971d66a2ef9f85151e53283113f33d642dabd
+      source_archive_sha256: <sha256>
+      license: <SPDX identifier>
+      history_isolation: git_archive_then_single_commit_reinit
+      nested_git_scan: passed
+    task:
+      type: feature_implementation
+      language: python
+      statement_path: task.md
+      statement_sha256: <sha256>
+      requirements:
+      - id: R1
+        text: Serializer accepts fallback_salts.
+      - id: R2
+        text: Signing continues to use only the primary salt.
+      - id: R3
+        text: Loading tries primary salt followed by fallbacks.
+      - id: R4
+        text: Unsafe timed loading preserves its backward-compatible tuple contract.
+      allowed_paths:
+      - src/**
+      - docs/**
+      - tests/**
+      forbidden_paths:
+      - .github/**
+      - .benchme/private/**
+      maximum_changed_files: 8
+      known_ambiguities: []
+    environment_ref: env-itsdangerous-py312-v1
+    agent_visible:
+      files:
+      - repository checkout
+      - task.md
+      - upstream tests
+      tests:
+      - upstream tests
+      hidden_from_agent:
+      - private verifier
+      - reference implementation
+      - post-task reviewer notes
+    oracle:
+      assurance_level: O3
+      verifier_ref: verifier-fallback-salts-v2
+      target_tests:
+      - private_tests/test_fallback_salts.py
+      regression_commands:
+      - pytest -q
+      static_commands:
+      - mypy src
+      - pyright
+      - ruff check .
+      security_commands: []
+      require_human_review: true
+      require_clean_evaluation_environment: true
+      test_requirement_map:
+      - requirement_id: R1
+        tests:
+        - test_constructor_accepts_fallback_salts
+      - requirement_id: R4
+        tests:
+        - test_unsafe_timed_load_contract
+    controls:
+      base_negative:
+        expected_target_failures: 9
+        expected_regression_passes: 297
+        status: passed
+      reference_positive:
+        reference_kind: evaluator_authored
+        patch_sha256: <sha256>
+        expected_target_passes: 9
+        expected_regression_passes: 297
+        status: passed
+      noop_negative:
+        required: true
+        status: passed
+      near_miss_negatives:
+      - id: sign_with_fallback_salt
+        expected: fail
+        status: passed
+      - id: break_unsafe_contract
+        expected: fail
+        status: passed
+      alternate_solution_positive:
+        required: false
+        status: not_run
+    information_policy:
+      web: deny
+      remote_git: deny
+      future_git_objects: absent
+      package_registry: setup_only_allowlisted_or_offline
+      issue_tracker: deny
+      hidden_tests_during_inference: absent
+      outbound_ledger_required: true
+    risk:
+      class: medium
+      blast_radius: library compatibility
+      verifiability: high_but_not_complete
+      sensitive_areas:
+      - token signing
+      - backward compatibility
+      human_review_dimensions:
+      - scope
+      - compatibility
+      - maintainability
+      - security semantics
+    validation:
+      reviewers: 1
+      review_status: approved
+      validated_at: '2026-07-09T00:00:00Z'
+      environment_preflight: passed
+      oracle_red_team: passed
+      flakiness_trials: 3
+      flakiness_observed: false
+    artifact_hashes:
+      capsule_manifest_sha256: <sha256>
+      task_statement_sha256: <sha256>
+      verifier_bundle_sha256: <sha256>
+      reference_patch_sha256: <sha256>
+environment_manifest:
+  schema_version: benchme.environment.v0.1
+  example:
+    environment_id: env-itsdangerous-py312-v1
+    platform:
+      os: linux
+      architecture: x86_64
+      container_runtime: docker
+      image: ghcr.io/benchme/python-runner@sha256:<digest>
+      kernel_class: containerized
+    toolchain:
+      python: 3.12.4
+      uv: 0.7.0
+      git: 2.45.2
+      pytest: 8.4.0
+      mypy: 1.16.0
+      pyright: 1.1.405
+      ruff: 0.12.0
+    dependency_state:
+      lockfiles:
+      - path: uv.lock
+        sha256: <sha256>
+      package_source: offline_mirror
+      package_source_snapshot: '2026-07-09'
+      install_network: deny
+    resources:
+      cpu_limit: 4
+      memory_mb: 8192
+      disk_mb: 20480
+      process_limit: 512
+      wall_clock_seconds: 1800
+    services: []
+    locale:
+      timezone: UTC
+      locale: C.UTF-8
+    security:
+      user: benchme
+      root: deny
+      host_mounts:
+      - workspace_rw
+      - artifacts_rw
+      hidden_verifier_during_inference: absent
+      seccomp_profile_sha256: <sha256>
+      outbound_policy_ref: sealed-v1
+      secret_sources: none
+    preflight:
+    - id: workspace_write
+      command: python -c "from pathlib import Path; Path('preflight.tmp').write_text('ok')"
+      expected: exit_0
+    - id: baseline_tests
+      command: pytest -q
+      expected: exit_0
+    - id: network_denied
+      command: python .benchme/probes/network_probe.py
+      expected: denied
+    - id: hidden_tests_absent
+      command: test ! -e /verifier/private_tests
+      expected: exit_0
+native_capability_manifest:
+  schema_version: benchme.capabilities.v0.1
+  fact_fields:
+  - default_state
+  - configurable
+  - observable
+  - evidence
+  - version_range
+  - checked_at
+  - benchmark_treatment
+  example:
+    manifest_id: aider-capabilities-<version>-2026-07-10
+    harness:
+      name: aider
+      version: <exact-version>
+      binary_sha256: <sha256>
+    checked_at: '2026-07-10'
+    capabilities:
+      repo_map:
+        default_state: enabled_conditionally
+        configurable: true
+        observable: partial
+        evidence:
+        - type: official_docs
+          url: https://aider.chat/docs/repomap.html
+        - type: local_probe
+          probe_sha: <git-sha>
+        benchmark_treatment:
+          native_product: preserve
+          fixed_harness_model: fix_parameters
+          augmentation: report_native_plus_external
+      edit_format:
+        default_state: model_specific
+        configurable: true
+        observable: true
+        evidence:
+        - type: official_docs
+          url: https://aider.chat/docs/more/edit-formats.html
+        benchmark_treatment:
+          native_product: preserve_recommended
+          fixed_harness_model: declare_required_adapter
+      test_repair_loop:
+        default_state: disabled
+        configurable: true
+        observable: true
+        evidence:
+        - type: official_docs
+          url: https://aider.chat/docs/usage/lint-test.html
+        benchmark_treatment:
+          native_product: declare_actual
+          controlled_intervention: toggle_as_named_factor
+    unknowns:
+    - exact native context truncation under provider X
+configuration_manifest:
+  schema_version: benchme.configuration.v0.1
+  required_identity_fields:
+  - configuration_id
+  - evaluation_track
+  - harness
+  - model
+  - prompt
+  - context
+  - tools
+  - permissions
+  - budget
+  - telemetry
+  - trial_policy
+  - hashes
+  example:
+    configuration_id: codex-cli-gpt-5.5-medium-sealed-v1
+    evaluation_track: fixed_harness_model
+    harness:
+      name: codex-cli
+      version: <exact-version>
+      binary_sha256: <sha256>
+      adapter_version: <git-sha>
+      capability_manifest_ref: codex-cli-capabilities-<version>-2026-07-10
+      headless_mode: exec
+      native_defaults_preserved: true
+      overridden_defaults:
+      - web_search
+      - network
+      - user_config_injection
+      - project_rule_injection
+    model:
+      provider: openai
+      exact_model_id: gpt-5.5
+      endpoint_class: chatgpt_authenticated
+      endpoint_region: unknown
+      reasoning_effort: medium
+      temperature: provider_default
+      seed: unsupported
+      prompt_cache: provider_managed
+      catalog_snapshot: '2026-07-09'
+    prompt:
+      system_source: native_harness
+      user_task_sha256: <sha256>
+      wrapper_template_version: benchme-task-wrapper-v1
+      instruction_files: []
+      hidden_benchmark_hints: none
+    context:
+      mode: native
+      external_pack_ref: null
+      external_pack_sha256: null
+      preloaded_files: []
+      native_context_observability: partial
+    tools:
+      native_tools:
+      - shell
+      - file_read
+      - file_write
+      - search
+      benchme_tools: []
+      web: disabled
+      mcp_servers: []
+    permissions:
+      workspace: read_write
+      outside_workspace: deny
+      network_policy: sealed-v1
+      approval_mode: noninteractive_safe
+      secrets: none
+    budget:
+      max_wall_seconds: 1200
+      max_turns: null
+      max_input_tokens: null
+      max_output_tokens: null
+      max_attributable_cost_usd: null
+      timeout_policy: hard_stop
+    telemetry:
+      structured_output: jsonl
+      token_usage_source: harness_reported
+      cost_attribution_tier: session_derived
+      raw_trace_storage: local_only
+    trial_policy:
+      planned_trials: 3
+      order_block: randomized_within_task
+      rerun_on_provider_error: 1
+      rerun_on_agent_failure: 0
+    hashes:
+      manifest_sha256: <sha256>
+      adapter_config_sha256: <sha256>
+context_pack:
+  schema_version: benchme.context_pack.v0.1
+  rule: A context pack is an experimental intervention and must never be silently treated as native agent performance.
+  example:
+    context_pack_id: itsdangerous-symbol-pack-v1
+    generator:
+      name: benchme-context
+      version: <git-sha>
+      deterministic: true
+    retrieval_methods:
+    - ripgrep
+    - tree_sitter_symbols
+    - dependency_edges
+    excluded_methods:
+    - web_search
+    - future_git_history
+    - gold_patch_similarity
+    included_items:
+    - path: src/itsdangerous/serializer.py
+      span: Serializer.__init__, dumps, loads
+      reason: task contract symbols
+    - path: src/itsdangerous/timed.py
+      span: TimedSerializer.loads
+      reason: inheritance behavior
+    token_count: 4200
+    sha256: <sha256>
+    leakage_review:
+      reviewer: <id>
+      status: approved
+      notes: []
+experiment_plan:
+  schema_version: benchme.experiment.v0.1
+  example:
+    experiment_id: public-python-native-v1
+    decision_question: Which of two native coding products is more reliable and economical for small Python maintenance
+      tasks?
+    preregistered_at: '2026-07-10T00:00:00Z'
+    task_set:
+      capsules:
+      - task-001
+      - task-002
+      inclusion_rule: validated_O2_or_higher
+      task_count_target: 10
+    tracks:
+    - id: native_product
+      configurations:
+      - claude-code-<model>-native
+      - codex-cli-<model>-native
+      fixed:
+      - task capsule
+      - environment
+      - verifier
+      - information policy
+      - wall-clock cap
+    - id: fixed_codex_model
+      configurations:
+      - codex-gpt55
+      - codex-gpt54
+      - codex-gpt54-mini
+      fixed:
+      - harness version
+      - prompt
+      - tools
+      - permissions
+      - environment
+      - verifier
+      - reasoning effort
+    - id: context_intervention
+      baseline: codex-gpt54-native
+      interventions:
+      - standardized_task_contract
+      - frozen_context_pack
+      - frozen_context_pack_plus_one_repair
+    primary_metrics:
+    - verified_solve
+    - regression_free_solve
+    - operational_success
+    secondary_metrics:
+    - wall_seconds
+    - cost_per_verified_solve
+    - tool_calls
+    - test_attempts
+    - diff_surface
+    - human_review_rubric
+    analysis:
+      paired_by_task: true
+      minimum_trials_per_cell: 3
+      confidence_interval: task_cluster_bootstrap
+      near_tie_rule: do_not_rank_when_interval_or paired_test_cannot_support_ordering
+      sequential_elimination: true
+      multiple_comparison_policy: declare exploratory unless preregistered
+    failure_handling:
+      invalid_preflight: exclude_from_capability_view_and_include_in runner_quality_report
+      provider_transient: one controlled rerun; retain original event
+      timeout: count as unsolved and report censored cost/time
+      agent_error: count as configuration failure
+      verifier_error: invalidate run; quarantine task if systemic
+run_event:
+  schema_version: benchme.event.v0.1
+  event_types:
+  - run_created
+  - preflight_started
+  - preflight_result
+  - inference_started
+  - model_usage
+  - tool_call_started
+  - tool_call_finished
+  - file_observed
+  - file_modified
+  - command_started
+  - command_finished
+  - network_attempt
+  - inference_finished
+  - patch_captured
+  - evaluation_started
+  - verification_check
+  - human_review
+  - run_finished
+  example:
+    event_id: <uuid>
+    run_id: <uuid>
+    sequence: 42
+    timestamp: '2026-07-10T12:00:00.000Z'
+    type: command_finished
+    source: harness_adapter
+    payload:
+      command_redacted: pytest -q
+      exit_code: 1
+      duration_ms: 1240
+      stdout_artifact_ref: artifacts/<sha256>
+    privacy:
+      contains_source_code: false
+      contains_secret: false
+      retention_class: local_raw
+    sha256: <sha256>
+verification_result:
+  schema_version: benchme.verification.v0.1
+  example:
+    run_id: <uuid>
+    capsule_id: task-001
+    verifier_sha256: <sha256>
+    clean_evaluation_checkout: true
+    checks:
+    - id: target
+      kind: hidden_tests
+      command: pytest -q /verifier/private_tests
+      result: pass
+      duration_ms: 1234
+    - id: regression
+      kind: upstream_tests
+      command: pytest -q
+      result: pass
+      duration_ms: 2345
+    - id: types
+      kind: static
+      command: mypy src
+      result: pass
+      duration_ms: 900
+    - id: forbidden_paths
+      kind: policy
+      result: pass
+    summary:
+      target_pass: true
+      regression_pass: true
+      static_pass: true
+      policy_pass: true
+      verified_solve: true
+    grader_integrity:
+      candidate_could_modify_hidden_tests: false
+      test_overwrite_detected: false
+      grader_error: false
+    artifacts:
+      patch_sha256: <sha256>
+      evaluation_log_sha256: <sha256>
+human_review:
+  schema_version: benchme.human_review.v0.1
+  dimensions:
+  - id: spec_alignment
+    scale: 0-2
+  - id: backward_compatibility
+    scale: 0-2
+  - id: scope_discipline
+    scale: 0-2
+  - id: maintainability
+    scale: 0-2
+  - id: security_semantics
+    scale: 0-2_or_not_applicable
+  - id: test_quality
+    scale: 0-2_or_not_applicable
+  example:
+    run_id: <uuid>
+    reviewer_id: <pseudonymous-id>
+    blinded_to_configuration: true
+    rubric_version: engineering-review-v1
+    scores:
+      spec_alignment: 2
+      backward_compatibility: 2
+      scope_discipline: 1
+      maintainability: 2
+      security_semantics: 2
+      test_quality: not_applicable
+    blocking_findings: []
+    non_blocking_findings:
+    - Unnecessary comment duplication
+    production_acceptable_for_task: true
+    review_minutes: 12.5
+    review_artifact_sha256: <sha256>
+failure_taxonomy:
+  schema_version: benchme.failure_taxonomy.v0.1
+  classes:
+    invalid_experiment:
+    - task_ambiguous
+    - task_unsolvable
+    - oracle_vacuous
+    - oracle_overconstrained
+    - reference_invalid
+    - hidden_test_leak
+    - future_history_present
+    - unsupported_configuration_change
+    environment_or_infrastructure:
+    - workspace_read_only
+    - dependency_setup_failure
+    - service_unavailable
+    - container_failure
+    - disk_or_memory_exhaustion
+    - runner_bug
+    - network_policy_misconfiguration
+    provider_or_transport:
+    - rate_limit
+    - provider_5xx
+    - authentication_failure
+    - stream_interrupted
+    - model_unavailable
+    harness:
+    - startup_failure
+    - tool_schema_failure
+    - patch_extraction_failure
+    - unsupported_cli_version
+    - permission_deadlock
+    agent_behavior:
+    - localization_failure
+    - incorrect_hypothesis
+    - invalid_edit
+    - test_avoidance
+    - destructive_change
+    - looping
+    - premature_stop
+    - context_loss
+    - reward_hacking_attempt
+    - answer_retrieval_attempt
+    verification:
+    - target_test_fail
+    - regression
+    - static_failure
+    - policy_violation
+    - timeout
+    - human_review_reject
+  reporting_views:
+    scientific_capability: Exclude only preregistered invalid-experiment/infrastructure cases; never silently erase
+      harness or agent failures.
+    operational_reliability: Count every deployment-relevant failure from experiment start through verified output.
+    runner_quality: Track invalid environment and adapter failures separately as BenchMe defects/SLOs.
+artifact_manifest:
+  schema_version: benchme.artifacts.v0.1
+  example:
+    run_id: <uuid>
+    artifacts:
+    - kind: run_manifest
+      path: run.yaml
+      sha256: <sha256>
+      retention: team_history
+    - kind: raw_trace
+      path: trace.jsonl
+      sha256: <sha256>
+      retention: local_raw
+    - kind: patch
+      path: candidate.patch
+      sha256: <sha256>
+      retention: team_history
+    - kind: git_status
+      path: git-status.txt
+      sha256: <sha256>
+      retention: team_history
+    - kind: verifier_log
+      path: verifier.log
+      sha256: <sha256>
+      retention: team_history
+    - kind: human_review
+      path: review.yaml
+      sha256: <sha256>
+      retention: team_history
+    manifest_sha256: <sha256>
+    signature:
+      scheme: optional_sigstore_or_local_key
+      value: <signature>
+minimum_cli:
+  commands:
+    benchme doctor: Probe host/container/network/tool availability without touching a task.
+    benchme capabilities probe <adapter>: Generate or verify a native capability manifest.
+    benchme capsule init: Create a capsule skeleton.
+    benchme capsule validate <capsule>: Run base/reference/no-op controls, leakage checks, and flakiness checks.
+    benchme plan <experiment.yaml>: Expand the declared design into immutable run manifests.
+    benchme run <plan>: Execute isolated runs and persist raw artifacts.
+    benchme verify <run>: Evaluate a patch in a clean verifier environment.
+    benchme review <run>: Open the blinded human-review workflow.
+    benchme analyze <experiment>: Compute paired results, intervals, Pareto views, and failure decomposition.
+    benchme report <experiment>: Generate Markdown/HTML/JSON decision artifacts.
+    benchme reproduce <run_id>: Rebuild environment and replay from immutable manifests.
+minimum_report:
+  sections:
+  - decision question and scope
+  - task-set validity and exclusions
+  - configuration cards
+  - native-product results
+  - fixed-harness or intervention results kept separate
+  - verified success with uncertainty
+  - operational reliability
+  - cost attribution tier
+  - failure taxonomy
+  - human review findings
+  - Pareto and task/risk segmentation
+  - recommended action
+  - what remains unproven
+  - machine-readable appendix
+  prohibited_claims_without_extra_evidence:
+  - base model superiority across harnesses
+  - organizational productivity improvement
+  - production safety from test pass alone
+  - enterprise-wide cost per accepted change from estimated tokens
+  - neutrality when native features were disabled or augmented silently
+minimum_data_model:
+  entities:
+  - repository
+  - capsule
+  - capsule_version
+  - environment
+  - capability_manifest
+  - configuration
+  - experiment
+  - run
+  - event
+  - artifact
+  - verification
+  - human_review
+  - metric
+  - failure
+  - decision_report
+  - live_change_later
+  - policy_later
+  join_key: immutable configuration manifest plus capsule version plus trial
+  source_of_truth: local SQLite metadata and content-addressed JSON/JSONL artifacts
+  optional_exports:
+  - OpenTelemetry
+  - Langfuse
+  - LangSmith
+  - Phoenix
