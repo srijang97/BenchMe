@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>BenchMe — Evaluation Cost Calculator</title>
+<style>
+  :root{
+    --ink:#1c1c1a; --muted:#6b6a66; --line:#e4e2dd; --bg:#fbfaf8; --card:#ffffff;
+    --blue:#3b6ea5; --green:#2f8f6f; --amber:#b07d3a; --red:#a8452f;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --ink:#eceae5; --muted:#9b9a95; --line:#33322e; --bg:#191817; --card:#211f1e;
+           --blue:#7ea6d4; --green:#5cbb98; --amber:#d6a463; --red:#d97a63; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;
+       padding:28px 20px 60px;}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:24px;margin:0 0 4px;letter-spacing:-.02em}
+  .sub{color:var(--muted);font-size:13.5px;margin:0 0 26px}
+  .grid{display:grid;grid-template-columns:340px 1fr;gap:22px}
+  @media(max-width:860px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);
+     margin:0 0 14px;font-weight:600}
+  label{display:block;font-size:13px;margin:14px 0 5px;color:var(--muted)}
+  label span{color:var(--ink);font-weight:600;float:right;font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%;accent-color:var(--blue);margin:0}
+  select,input[type=number]{width:100%;padding:7px 9px;border:1px solid var(--line);
+     border-radius:7px;background:var(--bg);color:var(--ink);font-size:13.5px}
+  .hero{display:flex;gap:26px;flex-wrap:wrap;align-items:flex-end;
+        padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:16px}
+  .big{font-size:38px;font-weight:700;letter-spacing:-.03em;font-variant-numeric:tabular-nums;line-height:1}
+  .lil{font-size:12px;color:var(--muted);margin-top:5px}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th{text-align:left;font-weight:600;color:var(--muted);font-size:11.5px;
+     text-transform:uppercase;letter-spacing:.06em;padding:0 8px 8px 0;border-bottom:1px solid var(--line)}
+  td{padding:8px 8px 8px 0;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+  tr:last-child td{border-bottom:none}
+  .num{text-align:right}
+  .bar{height:7px;border-radius:4px;background:var(--blue);min-width:2px}
+  .chip{display:inline-block;font-size:10.5px;padding:1px 7px;border-radius:20px;
+        border:1px solid var(--line);color:var(--muted);margin-left:6px;vertical-align:1px}
+  .models{max-height:230px;overflow-y:auto;margin-top:6px;border:1px solid var(--line);
+          border-radius:8px;padding:8px 10px}
+  .models div{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:13px}
+  .models input{accent-color:var(--blue)}
+  .note{font-size:12px;color:var(--muted);margin-top:14px;line-height:1.5}
+  .warn{color:var(--red);font-weight:600}
+  .ok{color:var(--green);font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>BenchMe — evaluation cost calculator</h1>
+  <p class="sub">API rates verified 4 Aug 2026. Token workload anchored on measured telemetry from
+     demo run <code>20260709T224810Z</code> (pallets/itsdangerous, Codex harness).</p>
+
+  <div class="grid">
+    <!-- ---------------- CONTROLS ---------------- -->
+    <div class="card">
+      <h2>Suite design</h2>
+
+      <label>Tasks in the suite <span id="vTasks">200</span></label>
+      <input type="range" id="tasks" min="5" max="500" step="5" value="200">
+
+      <label>Trials per task (k) <span id="vK">5</span></label>
+      <input type="range" id="k" min="1" max="10" step="1" value="5">
+
+      <label>Task difficulty <span id="vDiff">medium</span></label>
+      <input type="range" id="diff" min="0" max="4" step="1" value="2">
+
+      <label>Harness overhead <span id="vHarn">Codex CLI</span></label>
+      <input type="range" id="harn" min="0" max="4" step="1" value="1">
+
+      <label>Prompt cache hit rate <span id="vCache">85%</span></label>
+      <input type="range" id="cache" min="0" max="95" step="5" value="85">
+
+      <label>Assumed pass rate override <span id="vPass">tier default</span></label>
+      <input type="range" id="pass" min="0" max="90" step="5" value="0">
+
+      <label>Failed-run token multiplier <span id="vFail">2.5&times;</span></label>
+      <input type="range" id="fail" min="10" max="50" step="1" value="25">
+
+      <label>Sequential early-stopping saving <span id="vSeq">0%</span></label>
+      <input type="range" id="seq" min="0" max="70" step="5" value="0">
+
+      <h2 style="margin-top:22px">Configurations under test</h2>
+      <div class="models" id="models"></div>
+      <p class="note">Every selected config runs the identical task set (paired design).</p>
+    </div>
+
+    <!-- ---------------- OUTPUT ---------------- -->
+    <div class="card">
+      <div class="hero">
+        <div>
+          <div class="big" id="total">$0</div>
+          <div class="lil">total API cost, one sweep</div>
+        </div>
+        <div>
+          <div class="big" id="traj" style="font-size:26px">0</div>
+          <div class="lil">agent trajectories</div>
+        </div>
+        <div>
+          <div class="big" id="mde" style="font-size:26px">—</div>
+          <div class="lil">minimum detectable effect</div>
+        </div>
+        <div>
+          <div class="big" id="hours" style="font-size:26px">—</div>
+          <div class="lil">wall-clock @ 30 parallel</div>
+        </div>
+      </div>
+
+      <table>
+        <thead><tr>
+          <th>Configuration</th><th class="num">$/solved</th>
+          <th class="num">Total</th><th style="width:24%"></th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+
+      <p class="note" id="verdict"></p>
+      <p class="note">
+        <b>Model notes.</b> Weaker models are assumed to burn more tokens
+        (frontier 1.0&times;, open 1.45&times;, cheap 2.10&times;) and solve fewer tasks
+        (60% / 50% / 33%) — both measured directionally in the demo run, where
+        gpt-5.4-mini used 2.12&times; the input tokens of gpt-5.4 on the same task.
+        Cost per <i>solved</i> task therefore includes the wasted spend on failures.
+        Non-API compute (containers) is ~2% of total and excluded.
+        Cross-checked against Databricks ($1.28–1.94/task) and HAL ($0.13–0.73/task);
+        this model runs 1.5–2&times; conservative, so treat outputs as an upper bound.
+      </p>
+    </div>
+  </div>
+</div>
+
+<script>
+const RATES = {
+ "Claude Fable 5":     {i:10,   o:50,  cw:1.25, cr:1.00,  cache:1, t:"frontier"},
+ "Claude Opus 5":      {i:5,    o:25,  cw:1.25, cr:0.50,  cache:1, t:"frontier"},
+ "Claude Sonnet 5":    {i:2,    o:10,  cw:1.25, cr:0.20,  cache:1, t:"frontier"},
+ "Claude Sonnet 5 (Sep+)":{i:3, o:15,  cw:1.25, cr:0.30,  cache:1, t:"frontier"},
+ "Claude Haiku 4.5":   {i:1,    o:5,   cw:1.25, cr:0.10,  cache:1, t:"cheap"},
+ "GPT-5.6 Sol":        {i:5,    o:30,  cw:1.00, cr:0.50,  cache:1, t:"frontier"},
+ "GPT-5.6 Terra":      {i:2,    o:12,  cw:1.00, cr:0.20,  cache:1, t:"frontier"},
+ "GPT-5.4":            {i:2.5,  o:15,  cw:1.00, cr:0.25,  cache:1, t:"frontier"},
+ "GPT-5.4 mini":       {i:0.75, o:4.5, cw:1.00, cr:0.075, cache:1, t:"cheap"},
+ "GPT-5.6 Luna":       {i:0.20, o:1.2, cw:1.00, cr:0.02,  cache:1, t:"cheap"},
+ "GLM-5.2":            {i:1.40, o:4.4, cw:1.00, cr:0.28,  cache:1, t:"open"},
+ "Kimi K2.6":          {i:0.95, o:4.0, cw:1.00, cr:0.19,  cache:1, t:"open"},
+ "DeepSeek V4 Pro":    {i:0.43, o:0.87,cw:1.00, cr:0.043, cache:1, t:"open"},
+ "MiniMax M3":         {i:0.30, o:1.2, cw:1.00, cr:0.30,  cache:0, t:"open"},
+ "Qwen3.5 Plus":       {i:0.40, o:2.4, cw:1.00, cr:0.40,  cache:0, t:"open"},
+};
+const TOKMULT = {frontier:1.00, open:1.45, cheap:2.10};
+const PASSDEF = {frontier:0.60, open:0.50, cheap:0.33};
+const TIERCOL = {frontier:"var(--blue)", open:"var(--green)", cheap:"var(--amber)"};
+
+const DIFFS = [["trivial (dep bump)",0.35],["small (bug fix)",0.70],
+               ["medium (feature) = anchor",1.00],["hard (multi-file, big repo)",3.00],
+               ["very hard (monorepo)",6.50]];
+const HARNS = [["lean (Aider / mini-SWE)",0.55],["Codex CLI",1.00],["Claude Code",1.35],
+               ["OpenHands",1.60],["context-heavy internal",2.20]];
+const IN0 = 487121, OUT0 = 7201, SEC0 = 158.5;
+
+const DEFAULT_ON = ["Claude Opus 5","Claude Sonnet 5","GPT-5.6 Sol","GPT-5.4",
+                    "GLM-5.2","Kimi K2.6"];
+
+const el = id => document.getElementById(id);
+const box = el("models");
+Object.keys(RATES).forEach(m=>{
+  const d=document.createElement("div");
+  d.innerHTML=`<input type="checkbox" id="m_${m}" ${DEFAULT_ON.includes(m)?"checked":""}>
+    <label for="m_${m}" style="margin:0;color:var(--ink);font-size:13px;flex:1">
+    ${m}<span class="chip">${RATES[m].t}</span>
+    ${RATES[m].cache?"":'<span class="chip" style="color:var(--red)">no cache</span>'}</label>`;
+  d.querySelector("input").addEventListener("change",render);
+  box.appendChild(d);
+});
+
+function runCost(m, inTok, outTok, h){
+  const r = RATES[m];
+  const hit = r.cache ? h : 0;
+  const effIn = hit*r.cr + (1-hit)*r.i*r.cw;
+  return inTok/1e6*effIn + outTok/1e6*r.o;
+}
+
+function render(){
+  const nT = +el("tasks").value, k = +el("k").value;
+  const [dName,dMult] = DIFFS[+el("diff").value];
+  const [hName,hMult] = HARNS[+el("harn").value];
+  const cache = +el("cache").value/100;
+  const passOv = +el("pass").value/100;
+  const failM = +el("fail").value/10;
+  const seq = +el("seq").value/100;
+
+  el("vTasks").textContent = nT;
+  el("vK").textContent = k;
+  el("vDiff").textContent = dName;
+  el("vHarn").textContent = hName;
+  el("vCache").textContent = Math.round(cache*100)+"%";
+  el("vPass").textContent = passOv ? Math.round(passOv*100)+"%" : "tier default";
+  el("vFail").textContent = failM.toFixed(1)+"×";
+  el("vSeq").textContent = Math.round(seq*100)+"%";
+
+  const chosen = Object.keys(RATES).filter(m=>el("m_"+m).checked);
+  let total=0; const rows=[];
+  chosen.forEach(m=>{
+    const tier = RATES[m].t;
+    const p = passOv || PASSDEF[tier];
+    const scale = dMult*hMult*TOKMULT[tier];
+    const base = runCost(m, IN0*scale, OUT0*scale, cache);
+    const attempt = p*base + (1-p)*base*failM;
+    const solved = attempt/p;
+    const cost = attempt*nT*k*(1-seq);
+    total += cost;
+    rows.push({m,solved,cost,tier});
+  });
+  const maxC = Math.max(...rows.map(r=>r.cost),1);
+  rows.sort((a,b)=>b.cost-a.cost);
+
+  el("total").textContent = "$"+Math.round(total).toLocaleString();
+  const traj = nT*k*chosen.length;
+  el("traj").textContent = traj.toLocaleString();
+
+  // MDE: n = (1.96+0.84)^2 * p_d / d^2  ->  d = sqrt(7.84*0.30/n)
+  const n = nT*k;
+  const mde = n>0 ? Math.sqrt(7.84*0.30/n)*100 : 0;
+  el("mde").textContent = mde>=100 ? "n/a" : "±"+mde.toFixed(1)+"pp";
+
+  const secPerRun = SEC0*dMult*hMult;
+  const hrs = traj*secPerRun*(1-seq)/30/3600;
+  el("hours").textContent = hrs<1 ? Math.round(hrs*60)+" min" : hrs.toFixed(1)+" hr";
+
+  el("rows").innerHTML = rows.map(r=>`<tr>
+     <td>${r.m}<span class="chip" style="border-color:${TIERCOL[r.tier]};color:${TIERCOL[r.tier]}">${r.tier}</span></td>
+     <td class="num">$${r.solved.toFixed(2)}</td>
+     <td class="num">$${Math.round(r.cost).toLocaleString()}</td>
+     <td><div class="bar" style="width:${Math.max(2,r.cost/maxC*100)}%;background:${TIERCOL[r.tier]}"></div></td>
+   </tr>`).join("");
+
+  let v;
+  if(mde>20) v=`<span class="warn">MDE ±${mde.toFixed(1)}pp — this suite can only detect enormous differences.</span> Add tasks or trials before making any decision on it.`;
+  else if(mde>10) v=`<span class="ok">MDE ±${mde.toFixed(1)}pp</span> — enough to detect harness-scale effects (~27pp) and cost deltas, not enough to separate two frontier models. Report anything smaller as <i>indistinguishable</i>.`;
+  else v=`<span class="ok">MDE ±${mde.toFixed(1)}pp</span> — publication-grade power. Check whether the decision actually needs this precision before paying for it.`;
+  el("verdict").innerHTML = v;
+}
+
+document.querySelectorAll('input[type=range]').forEach(s=>s.addEventListener("input",render));
+render();
+</script>
+</body>
+</html>

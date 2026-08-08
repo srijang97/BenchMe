@@ -18,3 +18,6 @@ Thumbs.db
 
 # Demo harness and its experiment artifacts (excluded for now)
 demo/
+
+# Local-only tooling: obra/superpowers vendored as a project-scoped skills-dir plugin
+.claude/skills/superpowers/

@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>BenchMe — Benchmark Methodology: Analysis & Completion</title>
+<style>
+:root{
+  --ink:#1a1917; --body:#33312d; --muted:#6f6d67; --faint:#9a9892;
+  --line:#e2e0da; --line2:#eeece7; --bg:#faf9f6; --card:#fff; --sub:#f5f3ef;
+  --blue:#3b6ea5; --green:#2f8f6f; --amber:#b07d3a; --red:#a8452f; --purple:#6b5b95;
+}
+@media (prefers-color-scheme:dark){
+  :root{--ink:#f0eee9;--body:#cfcdc7;--muted:#9b9993;--faint:#77756f;
+        --line:#33312d;--line2:#262421;--bg:#141312;--card:#1c1b19;--sub:#211f1d;
+        --blue:#7ea6d4;--green:#5cbb98;--amber:#d6a463;--red:#d97a63;--purple:#a595c9;}
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:70px}
+body{margin:0;background:var(--bg);color:var(--body);
+ font:16px/1.65 ui-serif,Georgia,"Iowan Old Style",serif;}
+.mono,code,td.num,.tag{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+h1,h2,h3,h4,nav,.tag,th,.kpi-n,.lbl{font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif}
+nav{position:sticky;top:0;z-index:50;background:color-mix(in srgb,var(--bg) 92%,transparent);
+ backdrop-filter:blur(12px);border-bottom:1px solid var(--line);padding:11px 24px;
+ display:flex;gap:20px;flex-wrap:wrap;font-size:12.5px;letter-spacing:.01em}
+nav a{color:var(--muted);text-decoration:none;white-space:nowrap}
+nav a:hover{color:var(--blue)}
+nav b{color:var(--ink);margin-right:6px}
+.wrap{max-width:1120px;margin:0 auto;padding:40px 24px 100px}
+header{border-bottom:2px solid var(--ink);padding-bottom:26px;margin-bottom:34px}
+h1{font-size:34px;line-height:1.18;margin:0 0 12px;color:var(--ink);letter-spacing:-.02em;font-weight:700}
+.dek{font-size:17px;color:var(--muted);margin:0;max-width:74ch}
+.meta{font-size:12.5px;color:var(--faint);margin-top:16px;letter-spacing:.02em}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.13em;color:var(--muted);
+ margin:56px 0 6px;font-weight:700;padding-top:14px;border-top:1px solid var(--line)}
+h3{font-size:23px;color:var(--ink);margin:6px 0 16px;letter-spacing:-.015em;font-weight:700}
+h4{font-size:16.5px;color:var(--ink);margin:30px 0 9px;font-weight:700}
+p{margin:0 0 15px;max-width:82ch}
+ul{margin:0 0 16px;padding-left:20px;max-width:82ch} li{margin:6px 0}
+a{color:var(--blue)}
+.tag{display:inline-block;font-size:10px;letter-spacing:.09em;text-transform:uppercase;
+ padding:2px 8px;border-radius:3px;font-weight:600;vertical-align:2px;margin-left:7px}
+.t-adopt{background:color-mix(in srgb,var(--green) 16%,transparent);color:var(--green)}
+.t-adapt{background:color-mix(in srgb,var(--blue) 16%,transparent);color:var(--blue)}
+.t-reject{background:color-mix(in srgb,var(--red) 16%,transparent);color:var(--red)}
+.t-new{background:color-mix(in srgb,var(--amber) 18%,transparent);color:var(--amber)}
+.t-watch{background:color-mix(in srgb,var(--purple) 16%,transparent);color:var(--purple)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:22px 26px;margin:22px 0}
+.new{border-left:3px solid var(--amber);background:color-mix(in srgb,var(--amber) 5%,var(--card))}
+.warn{border-left:3px solid var(--red);background:color-mix(in srgb,var(--red) 5%,var(--card))}
+.good{border-left:3px solid var(--green);background:color-mix(in srgb,var(--green) 5%,var(--card))}
+.card h4{margin-top:0}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:1px;
+ background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:26px 0}
+.kpi{background:var(--card);padding:17px 18px}
+.kpi-n{font-size:27px;font-weight:700;color:var(--ink);letter-spacing:-.02em;line-height:1.1;
+ font-variant-numeric:tabular-nums}
+.kpi-l{font-size:12px;color:var(--muted);margin-top:5px;line-height:1.4}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:18px 0;
+ font-family:ui-sans-serif,-apple-system,sans-serif}
+th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;
+ color:var(--muted);padding:0 12px 9px 0;border-bottom:1.5px solid var(--line);font-weight:700;vertical-align:bottom}
+td{padding:10px 12px 10px 0;border-bottom:1px solid var(--line2);vertical-align:top;line-height:1.45}
+td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;font-size:13px}
+tbody tr:hover{background:var(--sub)}
+.big{font-weight:700;color:var(--ink)}
+.tw{overflow-x:auto;margin:18px -4px}
+.q{border-left:3px solid var(--line);padding:2px 0 2px 18px;margin:18px 0;
+ color:var(--muted);font-style:italic;max-width:76ch}
+.flag{color:var(--red);font-weight:600;font-size:12px}
+.src{font-size:12px;color:var(--faint);font-family:ui-sans-serif,sans-serif}
+.srcgrid{columns:2;column-gap:34px;font-size:12.5px;line-height:1.75;
+ font-family:ui-sans-serif,sans-serif}
+@media(max-width:720px){.srcgrid{columns:1}}
+.srcgrid a{display:block;break-inside:avoid;color:var(--muted);text-decoration:none}
+.srcgrid a:hover{color:var(--blue)}
+.lead{font-size:17.5px;line-height:1.6;color:var(--ink)}
+.rule{height:1px;background:var(--line);margin:34px 0;border:0}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+@media(max-width:820px){.two{grid-template-columns:1fr}}
+.lbl{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--faint);
+ font-weight:700;margin-bottom:7px}
+ol.steps{counter-reset:s;list-style:none;padding-left:0;max-width:82ch}
+ol.steps li{counter-increment:s;position:relative;padding-left:38px;margin:14px 0}
+ol.steps li::before{content:counter(s);position:absolute;left:0;top:1px;width:25px;height:25px;
+ border-radius:50%;background:var(--sub);border:1px solid var(--line);color:var(--muted);
+ font:600 12px ui-sans-serif,sans-serif;display:grid;place-items:center}
+</style>
+</head>
+<body>
+
+<nav>
+  <b>BenchMe</b>
+  <a href="#summary">Summary</a>
+  <a href="#gaps">What was missed</a>
+  <a href="#mining">1 · Task mining</a>
+  <a href="#env">2 · Environment</a>
+  <a href="#oracle">3 · Oracles</a>
+  <a href="#controls">4 · Controls</a>
+  <a href="#harness">5 · Harness</a>
+  <a href="#stats">6 · Statistics</a>
+  <a href="#gov">7 · Governance</a>
+  <a href="#compete">8 · Competitors</a>
+  <a href="#decisions">Decisions</a>
+  <a href="#conflicts">Open conflicts</a>
+  <a href="#sources">Sources</a>
+</nav>
+
+<div class="wrap">
+
+<header>
+  <h1>Benchmark methodology for private-repo agent evaluation</h1>
+  <p class="dek">Analysis of the 10 July 2026 research dossier, completed with the three literatures it
+  missed: the RL environment-synthesis lineage, the 2026 harness-control studies, and the oracle
+  red-teaming work. Every methodological finding mapped to an adopt / adapt / reject decision.</p>
+  <p class="meta">Prepared 4 August 2026 · Base corpus: 123-source dossier, 27 benchmark families ·
+  Added: 34 systems and studies not present in the base corpus</p>
+</header>
+
+<!-- ═══════════════ SUMMARY ═══════════════ -->
+<h2 id="summary">Executive summary</h2>
+<h3>The dossier is methodologically strong and empirically incomplete</h3>
+
+<p class="lead">The July research is genuinely good on <em>doctrine</em> — the oracle assurance ladder,
+the five never-merge evaluation tracks, the configuration manifest as join key, the failure taxonomy
+with two denominators. That framework is better than anything published by a competitor. What it
+lacks is the 2026 empirical layer: it names techniques without yields, asserts statistical defaults
+without power analysis, and misses an entire parallel literature that has been solving BenchMe's
+hardest problem for eighteen months.</p>
+
+<div class="kpis">
+  <div class="kpi"><div class="kpi-n">2.2%</div><div class="kpi-l">True yield of honest PR mining — 2,308 valid instances from 102,582 candidates (SWE-Next). The dossier publishes no yield figure at all.</div></div>
+  <div class="kpi"><div class="kpi-n">48×</div><div class="kpi-l">Storage reduction from repo-quarter environment profiles — 639 GB vs 30.8 TB naive. Directly solves BenchMe's per-commit image cost.</div></div>
+  <div class="kpi"><div class="kpi-n">36 runs</div><div class="kpi-l">Needed to resolve a 1 pp difference at 80% power. 9 runs for 2 pp. Measured over 60,000 trajectories.</div></div>
+  <div class="kpi"><div class="kpi-n">9 of 10</div><div class="kpi-l">Benchmarks on which an automated red-team achieved near-perfect scores <em>without solving a single task</em>.</div></div>
+  <div class="kpi"><div class="kpi-n">not transitive</div><div class="kpi-l">Harness rankings invert across task suites. OpenClaw ranks 1st of 5 on one benchmark and last of 6 on another.</div></div>
+</div>
+
+<h4>The five findings that change BenchMe's design</h4>
+
+<ol class="steps">
+<li><strong>Harness rankings are not transitive across task suites.</strong> Claw-SWE-Bench ranks
+OpenClaw first of five harnesses (73.4%); Harness-Bench ranks the same harness last of six (52.4%).
+Same names, opposite order, different task populations. This is the strongest published evidence
+<em>for</em> BenchMe's entire thesis — if harness rankings do not transfer between two public
+benchmarks, they certainly do not transfer to a private repo. Put this on the first slide.</li>
+
+<li><strong>Harness sensitivity scales inversely with model strength.</strong> The harness spread is
+10.3 pp on GLM 5.1 but 27.4 pp on the weaker Qwen 3.6-flash. Teams running cheap or open models need
+harness measurement 2.7× more than teams running frontier models — a real segmentation signal that
+also tells you which customers feel the pain first.</li>
+
+<li><strong>Variance persists at temperature 0.</strong> The definitive study (60,000 trajectories,
+6 configs × 500 tasks × 10 runs) finds single-run pass@1 ranges of 2.2–6.0 pp, and one configuration
+had <em>higher</em> variance at T=0 than at default. Median trajectory divergence occurs at token
+position 5. Determinism is not available; the dossier's "3–5 trials for close candidates" is
+correct but was previously unsupported.</li>
+
+<li><strong>Environment reuse has a published, cheap answer, and BenchMe missed it.</strong>
+SWE-Factory achieves 33.5–40.1% valid instances at <strong>$0.024–0.045 each</strong> using a
+four-agent builder, and eliminates per-framework log parsers entirely by injecting a standardised
+exit-code sentinel — 100% accuracy across 2,085 test logs. SWE-Next amortises images across
+repo-quarters for a 48× storage reduction. Both are directly adoptable this month.</li>
+
+<li><strong>Your oracle doctrine has a documented counter-example.</strong> BenchMe's rule is
+"execution-based primary, refuse the LLM judge." EvilGenie tested exactly this and found held-out
+unit tests gave only <em>minimal</em> improvement over other reward-hack detectors, while the LLM
+judge was highly effective on unambiguous cases. And an ISSTA 2026 replicability study finds coverage
+and mutation scores are <em>not</em> reliable adequacy indicators when the goal is exposing defects
+in buggy code. Both cut against the current plan and both need answering.</li>
+</ol>
+
+<!-- ═══════════════ GAPS ═══════════════ -->
+<h2 id="gaps">What the July research missed</h2>
+<h3>Three whole literatures, plus a competitive refresh</h3>
+
+<div class="card new">
+<h4>A. The RL environment-synthesis lineage <span class="tag t-new">entirely absent</span></h4>
+<p>The dossier names SWE-smith and R2E-Gym in a single sentence and moves on. In fact this is the
+field that has spent two years solving "how do you construct and verify tasks at scale" — the exact
+problem BenchMe calls its hardest. Eight systems, all with published methodology, none in the base
+corpus beyond a citation.</p>
+<p><strong>Note the naming collision you flagged:</strong> there are <em>two</em> DeepSWEs.
+<strong>DeepSWE-Preview</strong> (Agentica + Together AI, Jul 2025) is a 32B RL-trained
+<em>agent</em>. <strong>DeepSWE the benchmark</strong> (arXiv 2607.07946, Jul 2026) is a separate
+113-task, 91-repo, 5-language evaluation with hand-written implementation-agnostic verifiers. The
+second is the one relevant to you, and it is the most interesting oracle design published this year.</p>
+</div>
+
+<div class="card new">
+<h4>B. The 2026 harness-control studies <span class="tag t-new">partially present</span></h4>
+<p>The dossier has Harness-Bench and Claw-SWE-Bench. It does not have: the definitive variance study
+(2602.07150), the longitudinal 35-release scaffold study's implications, the scaffold source-code
+taxonomy (2604.03515), HarnessX, Meta-Harness, AgentAtlas's config-only rank inversions, or
+<strong>Inspect AI's agent bridge</strong> — which is a materially better way to run the model axis
+than the container-boundary approach BenchMe currently plans.</p>
+</div>
+
+<div class="card new">
+<h4>C. Oracle red-teaming and test-adequacy <span class="tag t-new">mostly absent</span></h4>
+<p>The dossier has UTBoost and the OpenAI audit. It lacks STING's full mutation methodology,
+PatchDiff's differential-testing numbers, <strong>BenchJack</strong> (automated benchmark red-teaming,
+219 flaws across 10 benchmarks), SpecBench's reward-hacking gap metric, EvilGenie's detector
+comparison, Hack-Verifiable Environments, and the ISSTA replicability study that questions mutation
+score as an adequacy proxy.</p>
+</div>
+
+<!-- ═══════════════ 1 MINING ═══════════════ -->
+<h2 id="mining">Stage 1</h2>
+<h3>Task discovery and mining</h3>
+
+<p>The dossier lists eight task sources and correctly observes that "automatically producing many
+candidate tasks is easier than proving each task is fair." What it does not do is quantify any of
+them. Here is the published evidence, which resolves BenchMe's single biggest open question — expected
+capsule yield.</p>
+
+<div class="tw">
+<table>
+<thead><tr><th>Method</th><th>Exemplar</th><th class="num">Yield</th><th class="num">Cost</th><th>Verification mechanism</th><th>Fit for BenchMe</th></tr></thead>
+<tbody>
+<tr><td class="big">Mine real PRs, execute both commits</td><td>SWE-Next (2603.20691)</td><td class="num">2.2%<br><span class="src">2,308 / 102,582</span></td><td class="num">30 h<br>639 GB</td><td>Strict test improvement, zero regressions ("NewCommitBetter")</td><td><span class="tag t-adopt">adopt</span> the honest baseline for a private repo</td></tr>
+<tr><td class="big">Automate env setup per issue</td><td>SWE-Factory (2506.10954)</td><td class="num">33.5–40.1%</td><td class="num">$0.024–0.045<br>per instance</td><td>Standardised exit-code harness; fail2pass at 92% precision / 100% recall</td><td><span class="tag t-adopt">adopt</span> the exit-code trick immediately</td></tr>
+<tr><td class="big">Inject bugs into few environments</td><td>SWE-smith (2504.21798)</td><td class="num">33.8–96.9%<br><span class="src">by strategy</span></td><td class="num">$2.32<br>per 1,000</td><td>Patch must break ≥1 passing test</td><td><span class="tag t-adapt">adapt</span> for volume, never for the decision set</td></tr>
+<tr><td class="big">Mine commits, backtranslate the issue</td><td>R2E-Gym (2504.07164)</td><td class="num">2.5× vs<br>issue-based</td><td class="num"><span class="flag">unpublished</span></td><td>Fail→Pass from commit; auto-generate F2P where absent</td><td><span class="tag t-adapt">adapt</span> — backtranslation solves your spec-writing cost</td></tr>
+<tr><td class="big">Replant issues across environments</td><td>SWE-Mirror (2509.08724)</td><td class="num"><span class="flag">undisclosed</span></td><td class="num"><span class="flag">undisclosed</span></td><td>Existing gym environment</td><td><span class="tag t-watch">watch</span> — decouples task count from env count</td></tr>
+<tr><td class="big">Generate whole projects from scratch</td><td>SWE-Playground (2512.12216)</td><td class="num">28 projects<br>704 traj.</td><td class="num"><span class="flag">undisclosed</span></td><td>Self-generated tests, originals restored to block hacking</td><td><span class="tag t-reject">reject</span> — no customer relevance</td></tr>
+<tr><td class="big">Learn a surrogate environment</td><td>SWE-World (2602.03419)</td><td class="num">16.6K tasks<br>3,763 repos</td><td class="num">no Docker</td><td>Learned transition + reward models replace container execution</td><td><span class="tag t-reject">reject</span> — <span class="flag">fidelity vs real execution unpublished</span></td></tr>
+<tr><td class="big">Implementation removal</td><td>Commit0 (2412.05772)</td><td class="num">n/a</td><td class="num">low</td><td>Signatures + tests retained; test-driven reconstruction</td><td><span class="tag t-adopt">adopt</span> as a cheap capsule class</td></tr>
+</tbody></table>
+</div>
+
+<div class="card good">
+<h4>The single most useful number in this report</h4>
+<p><strong>SWE-Next's 2.2% yield, with its failure breakdown: 74.5% of candidate commit pairs show
+unchanged test behaviour, 20.8% fail test execution, 2.5% fail setup.</strong></p>
+<p>Your own pivot criterion is "&lt;8 valid tasks per repo means stop." At a 2.2% conversion from
+raw commits, a repo needs roughly <strong>360 candidate commit pairs to yield 8 capsules</strong>,
+and ~900 to yield 20. Any repo with 2+ years of active history clears that comfortably; a
+low-activity internal service does not. That gives you a <em>mechanical qualification test</em> you
+can run on a customer's repo in minutes, before any conversation about access.</p>
+<p>It also reframes the yield problem correctly: the binding constraint is not mining sophistication,
+it is that three quarters of real commits simply do not move the test needle. No technique fixes
+that — it is a property of how people write code.</p>
+</div>
+
+<h4>Two techniques to steal this month</h4>
+<p><strong>SWE-Factory's exit-code sentinel.</strong> Rather than writing a log parser per test
+framework — which your knowledge base budgets ~1 minute per repo for, and which breaks constantly —
+append a command that emits <code>EXIT_CODE=&lt;value&gt;</code> and parse that. Measured at 100%
+accuracy against manual inspection across 2,085 test logs. This removes an entire category of
+adapter maintenance.</p>
+<p><strong>SWE-Next's repo-quarter profiles.</strong> Map commits to <code>repo_{year}Q{quarter}</code>
+and reuse one dependency environment across all commits in that window, rather than building an image
+per commit. <strong>639 GB total against an estimated 30.8 TB naive.</strong> Against the dossier's
+own note that SWE-bench recommends 120 GB for local evaluation, this is the difference between a
+laptop-feasible product and a datacentre one.</p>
+
+<h4>The error2pass pathology <span class="tag t-new">new</span></h4>
+<p>SWE-Factory identifies a failure mode your control matrix will hit: tests that fail before the
+patch because of <em>structural or collection</em> errors rather than the bug being tested. These
+look like valid fail-to-pass pairs and are not. Including them deflates measured capability and
+inflates apparent task validity. Add an explicit check that the pre-patch failure is an assertion
+failure, not an import error, collection error, or syntax error.</p>
+
+<!-- ═══════════════ 2 ENV ═══════════════ -->
+<h2 id="env">Stage 2</h2>
+<h3>Environment reconstruction</h3>
+
+<p>The dossier grades automatic environment setup "weak-to-moderate, low success on difficult repos"
+and supplies <em>no numeric success rate anywhere</em>. That gap matters, because the number is the
+whole argument for the enterprise wedge.</p>
+
+<div class="two">
+<div class="card">
+<div class="lbl">The published reality</div>
+<ul>
+<li><strong>EnvBench:</strong> best LLM-agent approach configures <strong>6.69%</strong> of Python
+repos and <strong>29.47%</strong> of JVM repos.</li>
+<li><strong>ExecutionAgent:</strong> 33/50 projects (66%), at <strong>74 minutes and $0.16</strong>
+per project.</li>
+<li><strong>SWE-Factory:</strong> environment setup succeeds on <strong>49.8–57.2%</strong> of issues
+depending on builder model.</li>
+<li><strong>SWE-smith:</strong> 128 working environments from the top 5,000 PyPI packages, at
+<strong>~7 minutes of human labour per repo</strong>.</li>
+</ul>
+</div>
+<div class="card good">
+<div class="lbl">Why this is your moat, not your problem</div>
+<p>No published system reliably containerises an arbitrary repository. But your customer's CI already
+checks out arbitrary commits, installs dependencies and runs tests hermetically, thousands of times
+a day.</p>
+<p><strong>Environment reuse, not synthesis.</strong> This converts the field's hardest open research
+problem into an integration problem against Buildkite, Actions, Jenkins and Bazel — and it is the
+one thing a "point it at any GitHub URL" competitor structurally cannot do.</p>
+</div>
+</div>
+
+<h4>The qualification question, stated precisely</h4>
+<p class="q">"Can you hand me a container image in which <code>&lt;your test command&gt;</code> passes
+at an arbitrary historical commit?"</p>
+<p>Ranked by how easily a repo answers yes: <strong>Bazel / Nix / Pants</strong> (hermetic by
+construction) → <strong>devcontainers</strong> (literally a spec for this) → <strong>explicit
+container images</strong> in CI config → <strong>Actions with runner-native setup steps</strong>
+(replay <code>setup-python</code>, apt installs; brittle). If it takes them more than an hour, they
+are a services engagement, not a design partner.</p>
+
+<!-- ═══════════════ 3 ORACLE ═══════════════ -->
+<h2 id="oracle">Stage 3</h2>
+<h3>Oracle construction and validation</h3>
+
+<p>This is where BenchMe's differentiation lives and where the dossier is strongest on doctrine
+(the O0–O4 assurance ladder is genuinely good) and weakest on method. Here is the full 2026 toolkit.</p>
+
+<div class="tw">
+<table>
+<thead><tr><th>Method</th><th>What it measures</th><th class="num">Key finding</th><th>Judgment</th></tr></thead>
+<tbody>
+<tr><td class="big">STING<br><span class="src">arXiv 2604.01518</span></td><td>Mutation testing on the benchmark's own tests — do wrong patches survive?</td><td class="num"><strong>77.0%</strong> of SWE-bench Verified instances admit a surviving wrong patch<br><span class="src">385/500, 2,124 variants</span></td><td><span class="tag t-adopt">adopt</span> — this is your differentiator</td></tr>
+<tr><td class="big">PatchDiff<br><span class="src">arXiv 2503.15223, ICSE 26</span></td><td>Differential testing: does the agent's patch behave like the reference?</td><td class="num"><strong>7.8%</strong> of "correct" patches fail the full suite; <strong>29.6%</strong> diverge behaviourally; of those <strong>46.8%</strong> are valid alternatives</td><td><span class="tag t-adopt">adopt</span> — separates wrong from merely different</td></tr>
+<tr><td class="big">UTBoost<br><span class="src">arXiv 2506.09289</span></td><td>LLM test augmentation, then re-score the leaderboard</td><td class="num"><strong>40.9%</strong> of Lite and <strong>24.4%</strong> of Verified submissions affected; 18 and 11 rank changes</td><td><span class="tag t-adapt">adapt</span> — STING supersedes it</td></tr>
+<tr><td class="big">BenchJack<br><span class="src">arXiv 2605.12673</span></td><td>Automated red-teaming of the benchmark harness itself</td><td class="num">Near-perfect scores on <strong>9 of 10</strong> benchmarks <em>without solving any task</em>; 219 flaws; hardening cut hackable ratio to &lt;10%</td><td><span class="tag t-adopt">adopt</span> the iterative hardening loop</td></tr>
+<tr><td class="big">SpecBench<br><span class="src">arXiv 2605.21384</span></td><td>Reward hacking as visible-minus-hidden pass-rate gap</td><td class="num">90th-percentile gap grows <strong>~27 pp per 10× code size</strong>; weaker models show larger gaps</td><td><span class="tag t-adopt">adopt</span> the gap metric — cheap and legible</td></tr>
+<tr><td class="big">DeepSWE benchmark<br><span class="src">arXiv 2607.07946</span></td><td>Hand-written verifiers accepting <em>any</em> implementation</td><td class="num"><strong>1.4%</strong> disagreement with independent evaluators, vs <strong>32.4%</strong> for a competitor benchmark</td><td><span class="tag t-adopt">adopt</span> the design principle</td></tr>
+<tr><td class="big">EvilGenie<br><span class="src">arXiv 2511.21654</span></td><td>Compares three reward-hack detectors head to head</td><td class="num">Held-out tests gave only <strong>minimal</strong> improvement; LLM judge highly effective on unambiguous cases</td><td><span class="tag t-watch">contradicts your doctrine</span></td></tr>
+<tr><td class="big">ISSTA replicability<br><span class="src">arXiv 2607.22880</span></td><td>Do coverage / mutation scores predict test effectiveness?</td><td class="num">Reliable in the <strong>regression</strong> setting; <strong>not</strong> reliable when the goal is exposing defects in buggy code</td><td><span class="tag t-watch">caution on your headline metric</span></td></tr>
+</tbody></table>
+</div>
+
+<div class="card warn">
+<h4>The central unresolved conflict in the field</h4>
+<p><strong>OpenAI's audit says SWE-bench's tests are too <em>strict</em>. STING says they are too
+<em>weak</em>. Both are correct simultaneously.</strong></p>
+<p>OpenAI found ≥59.4% of audited problems have flawed tests — <strong>35.5% narrow</strong>
+(enforcing unspecified implementation details, rejecting functionally correct submissions) and
+<strong>18.8% wide</strong> (checking behaviour the issue never disclosed). STING found 77% admit a
+passing wrong patch. These pull benchmark design in opposite directions and no published method
+satisfies both.</p>
+<p><strong>The best attempted resolution is the DeepSWE benchmark's design: hand-written verifiers
+that accept any implementation of the requested functionality, with solutions kept private.</strong>
+It reports 1.4% disagreement with independent evaluators against 32.4% for a competitor. That is an
+oracle designed for <em>behavioural specification</em> rather than implementation matching — and it
+is precisely what your <code>fallback-salts</code> capsule already does with its nine-point
+behavioural contract. You arrived at the right design independently. Say so publicly.</p>
+</div>
+
+<h4>What "oracle strength" should actually mean on a report</h4>
+<p>Report a per-capsule profile, never a binary. Six components, each cheap to compute:</p>
+<ul>
+<li><strong>Mutation survival rate</strong> — % of generated wrong patches the suite fails to catch.</li>
+<li><strong>Alternate-solution acceptance</strong> — does an independently written correct implementation pass? (STING's anti-overfitting gate applies 12 behaviour-preserving transformations; steal that list.)</li>
+<li><strong>Differential divergence</strong> — PatchDiff-style, with the wrong / valid-alternative split reported separately.</li>
+<li><strong>Patch-region coverage</strong> — STING moved this 40.8% → 51.6% via augmentation.</li>
+<li><strong>Visible-hidden gap</strong> — SpecBench's reward-hacking proxy.</li>
+<li><strong>Red-team status</strong> — did a hacker agent obtain reward without completing the task?</li>
+</ul>
+<p>Nobody ships this. Sigmabench's oracle is a <em>file-level Jaccard index against a golden diff</em>
+— it does not run tests at all. Stet gates on the human PR's tests and then layers LLM judgement
+above. Neither can report any of the six.</p>
+
+<!-- ═══════════════ 4 CONTROLS ═══════════════ -->
+<h2 id="controls">Stage 4</h2>
+<h3>Controls, contamination and anti-gaming</h3>
+
+<p>The dossier's six mandatory controls are correct and better specified than any public benchmark's.
+The 2026 additions are about <em>adversarial</em> controls, which is where the field moved.</p>
+
+<div class="two">
+<div class="card">
+<div class="lbl">Already in the dossier — keep</div>
+<ul>
+<li>Base negative / reference positive / regression control</li>
+<li>No-op and near-miss rejection</li>
+<li>Alternate-solution positive</li>
+<li>Adversarial verifier probe</li>
+<li>Four named information policies, never mixed in one ranking</li>
+<li><code>git archive</code> + single-commit re-init, remotes/tags/reflogs/alternates stripped</li>
+<li>Default-deny egress with pinned offline mirror</li>
+</ul>
+</div>
+<div class="card new">
+<div class="lbl">Add from 2026</div>
+<ul>
+<li><strong>BenchJack's eight flaw classes</strong> as a checklist: isolation failure, leaked answers, RCE, judge prompt injection, weak string matching, evaluation-logic gaps, trusting untrusted output, excessive permissions.</li>
+<li><strong>Iterative hacker–fixer loop</strong> to convergence, not a single probe. BenchJack drove hackable-task ratio from ~100% to &lt;10%; WebArena and OSWorld reached 0% in three iterations.</li>
+<li><strong>Hack-Verifiable planting</strong> — deliberately plant detectable exploits to verify your own detection works. "Hacking is addictive": once an agent finds an exploit it reuses it.</li>
+<li><strong>Two-container boundary, enforced.</strong> Your current setup keeps private tests "outside the candidate git root," which your own docs concede is not a boundary.</li>
+</ul>
+</div>
+</div>
+
+<div class="card">
+<h4>The retrieval numbers that justify sealing</h4>
+<p>Cursor's audit of successful trajectories: <strong>57% used the public web to look up the merged
+fix; 9% mined bundled git history</strong>. The dossier cites a 63% overall retrieval figure and
+correctly warns against generalising it. Claw-SWE-Bench measured the effect of <em>removing</em>
+reachable future commits: <strong>−8.0 pp</strong> on the strongest model, and near zero on the
+weakest — stronger agents exploit more effectively, so sealing matters <em>more</em> as models
+improve, not less.</p>
+</div>
+
+<!-- ═══════════════ 5 HARNESS ═══════════════ -->
+<h2 id="harness">Stage 5</h2>
+<h3>The harness axis</h3>
+
+<p>This is the axis your product is named after, and the 2026 evidence is now overwhelming. Ordered
+by effect size — note where pure noise sits.</p>
+
+<div class="tw">
+<table>
+<thead><tr><th>What was varied</th><th>Held fixed</th><th class="num">Swing</th><th>Source</th></tr></thead>
+<tbody>
+<tr><td class="big">Adapter / output-contract design</td><td>model + harness</td><td class="num big">54.3 pp<br><span class="src">19.1 → 73.4</span></td><td>Claw-SWE-Bench</td></tr>
+<tr><td class="big">Model (9-way)</td><td>harness</td><td class="num big">29.4 pp</td><td>Claw-SWE-Bench</td></tr>
+<tr><td class="big">Harness (5-way) on a <em>weak</em> model</td><td>Qwen 3.6-flash</td><td class="num big">27.4 pp</td><td>Claw-SWE-Bench</td></tr>
+<tr><td class="big">Harness (6-way, domain-mixed)</td><td>model averaged out</td><td class="num big">23.8 pp</td><td>Harness-Bench <span class="src">5,194 trajectories</span></td></tr>
+<tr><td class="big">Harness (leaderboard, same model)</td><td>Opus 4.6 / GPT-5.5</td><td class="num">18.4 / 18.6 pp</td><td>Terminal-Bench 2.0</td></tr>
+<tr><td class="big">Prompt config (taxonomy-aware vs blind)</td><td>model</td><td class="num">14–40 pp</td><td>AgentAtlas</td></tr>
+<tr><td class="big">Automated harness evolution</td><td>model</td><td class="num">+14.5 avg<br>+44.0 max</td><td>HarnessX</td></tr>
+<tr><td class="big">Benchmark task repair (2.0 → 2.1)</td><td>model + harness</td><td class="num">+12.1 pp</td><td>Terminal-Bench 2.1</td></tr>
+<tr><td class="big">Harness (5-way) on a <em>strong</em> model</td><td>GLM 5.1</td><td class="num">10.3 pp</td><td>Claw-SWE-Bench</td></tr>
+<tr><td class="big">Future-history leakage removal</td><td>model + harness</td><td class="num">−8.0 pp</td><td>Claw-SWE-Bench</td></tr>
+<tr style="background:color-mix(in srgb,var(--red) 7%,transparent)"><td class="big">Nothing — pure run-to-run noise</td><td>everything</td><td class="num big">2.2–6.0 pp<br><span class="src">σ = 1.0–1.8</span></td><td>On Randomness in Agentic Evals</td></tr>
+</tbody></table>
+</div>
+
+<div class="card good">
+<h4>Non-transitivity: the finding that makes the business</h4>
+<p>Claw-SWE-Bench and Harness-Bench evaluate <em>the same five harness families</em> and produce
+opposite orderings. OpenClaw is best-of-five in one and worst-of-six in the other. The likely
+explanation — different task populations, plus one benchmark's adapter doing more work for one
+harness — is beside the point.</p>
+<p>The point is: <strong>if a harness ranking does not transfer between two public benchmarks, no
+public benchmark can tell a team which harness to run on their repository.</strong> That is the
+product thesis, and it is now evidenced by two independent 2026 papers rather than asserted.</p>
+</div>
+
+<h4>Inspect AI's agent bridge — a better architecture than the one you planned <span class="tag t-new">new</span></h4>
+<p>Two families of harness standardisation exist, and the dossier only considers one.</p>
+<div class="two">
+<div class="card">
+<div class="lbl">Container boundary</div>
+<p>Harbor, HAL, Claw-SWE-Bench's five-method adapter. The agent is a black box in a container; the
+model is passed in via config. <strong>Clean harness-axis control</strong> — you can swap harnesses
+freely. But the model axis depends on each harness exposing model configuration, which closed
+products often do not.</p>
+</div>
+<div class="card new">
+<div class="lbl">API interception</div>
+<p>Inspect AI's <code>sandbox_agent_bridge()</code> runs a proxy on <code>localhost:13131</code> and
+<strong>intercepts the agent's native OpenAI/Anthropic/Google API calls, rerouting them to whichever
+model you choose</strong>. The harness is completely unmodified. <strong>Clean model-axis control</strong> —
+you can point an unmodified Claude Code at an arbitrary model.</p>
+</div>
+</div>
+<p>A rigorous (model × harness) grid needs both. Interception for the model axis, container adapters
+for the harness axis. Epoch AI already uses <code>inspect-swe</code> to run Claude Code and Codex as
+scaffolds inside Inspect on SWE-bench Verified, so this is proven in practice. <strong>This is the
+highest-value architectural change in this report</strong> and it removes your dependence on each
+vendor exposing a model flag.</p>
+
+<h4>Keep mini-SWE-agent as the control arm</h4>
+<p>~100 lines of Python, bash only, does not even use the LM tool-calling interface — and it reports
+&gt;74% on SWE-bench Verified. Its authors position it explicitly as a control that "puts the
+language model rather than the agent scaffold in the middle of our attention." Every harness grid
+should include it as the floor, so you can report <em>how much of a score is scaffolding</em>.</p>
+
+<!-- ═══════════════ 6 STATS ═══════════════ -->
+<h2 id="stats">Stage 6</h2>
+<h3>Metrics and statistics</h3>
+
+<p>The dossier's statistical doctrine — paired design, McNemar, hierarchical logit, Wilson intervals,
+"pilot decision-grade = 15–30 tasks × 3–5 trials" — is correct. It was also, until now, unsupported
+by any power analysis. The definitive study now exists.</p>
+
+<div class="card good">
+<h4>On Randomness in Agentic Evals <span class="src">arXiv 2602.07150 · KTH</span></h4>
+<p><strong>60,000 trajectories.</strong> 10 independent runs × 6 configurations (3 models × 2
+scaffolds) × 500 SWE-bench Verified tasks × 2 temperature settings. 25.58B tokens, 1.88M tool calls.
+This is the study the dossier needed and did not have.</p>
+<div class="tw">
+<table>
+<thead><tr><th>Finding</th><th class="num">Value</th><th>Implication for BenchMe</th></tr></thead>
+<tbody>
+<tr><td>Single-run pass@1 range across 10 runs</td><td class="num big">2.2–6.0 pp</td><td>Any single-run comparison under ~6 pp is uninterpretable</td></tr>
+<tr><td>Typical standard deviation</td><td class="num">±1.0–1.8 pp</td><td>Sets the floor for your MDE reporting</td></tr>
+<tr><td>Variance at temperature 0</td><td class="num big">persists</td><td>One config had <em>higher</em> variance at T=0. Do not sell determinism.</td></tr>
+<tr><td>Median first-token divergence</td><td class="num">position 5</td><td>0.5% into the trajectory. T=0 delays it to position 56, does not remove it.</td></tr>
+<tr><td>Runs to detect +1 pp at 80% power</td><td class="num big">36</td><td rowspan="3">Publish this table in your reports. It is the clearest possible argument that a customer's internal bake-off cannot support its own conclusions.</td></tr>
+<tr><td>Runs to detect +2 pp</td><td class="num big">~9</td></tr>
+<tr><td>Runs to detect +5 pp</td><td class="num big">1–2</td></tr>
+<tr><td>pass@5 vs pass^5 gap</td><td class="num">14.4–37 pp</td><td>The reliability gap nobody reports. Make it a headline metric.</td></tr>
+</tbody></table>
+</div>
+</div>
+
+<div class="card warn">
+<h4>Read the effect-size table against the noise floor</h4>
+<p>Cross-referencing §5 against 2602.07150 disciplines the whole literature — <em>and your own
+roadmap</em>:</p>
+<ul>
+<li><strong>Safely real:</strong> the 54.3 pp adapter effect, the 29.4 pp model spread, the 27.4 pp
+and 23.8 pp harness spreads, the ~18 pp Terminal-Bench leaderboard gaps.</li>
+<li><strong>Not established:</strong> Claw-SWE-Bench's 10.3 pp harness spread on the strong model,
+and its −2.0 pp leakage effect on Qwen. Both are single-run and sit within or near noise.</li>
+<li><strong>Almost every harness study in this report is single-run.</strong> Harness-Bench,
+Claw-SWE-Bench and the Terminal-Bench leaderboard all publish point estimates. The large effects
+survive; the fine-grained orderings inside each study do not.</li>
+</ul>
+<p>Practical consequence for your product: <strong>a config-regression suite is a guardrail, not an
+optimiser.</strong> You can reliably detect a harness swap or a model change. You cannot reliably
+detect whether a prompt tweak helped by 2 pp without 9 repeats per task, which no customer will pay
+for weekly. Sell it as "did we break anything," not "did we improve."</p>
+</div>
+
+<h4>HAL's honesty, worth copying</h4>
+<p>The Holistic Agent Leaderboard (ICLR 2026) is the closest thing to BenchMe's intended reporting —
+explicitly three-dimensional (models × scaffolds × benchmarks), 142 combinations, 21,730 rollouts,
+~$40,000, with cost-vs-accuracy Pareto frontiers and a frozen price table. It also states plainly:</p>
+<p class="q">"At these prices, running multiple trials to construct confidence intervals becomes
+prohibitively expensive. For HAL, we were forced to rely on single runs without statistical
+validation for most evaluations."</p>
+<p>Its motivating statistic — <strong>"agents can be 100× more expensive while only being 1% better"</strong> —
+plus the concrete case of a scaffold/model pair costing 9× more for a 2 pp difference, is the best
+available third-party support for cost-per-solved-task as a primary metric.</p>
+
+<!-- ═══════════════ 7 GOV ═══════════════ -->
+<h2 id="gov">Stage 7</h2>
+<h3>Governance and versioning</h3>
+
+<p>The dossier is genuinely excellent here — task lifecycle states, the correction-creates-a-version
+rule, the nine technical kill switches, the 14-item minimum reporting standard. Two additions.</p>
+
+<div class="card new">
+<h4>Benchmark repair moves scores more than model upgrades</h4>
+<p>Terminal-Bench 2.1 patched <strong>28 of 89 tasks</strong> across three defect classes — external
+dependency drift (9), resource/timeout mismatches (8), and instruction–verifier misalignment. Effect
+on identical agent+model pairs: <strong>Claude Opus 4.6 + Claude Code went 58.0 → 70.1 (+12.1 pp)</strong>;
+Gemini 3 Flash +9.4; GPT-5.4 mini +8.3.</p>
+<p>A benchmark hygiene patch moved scores further than most model releases do. This is the single
+best argument for your recurring-revenue story: <strong>a task corpus is not a static asset, it
+decays, and someone has to maintain it.</strong> Nobody re-derives their internal 105-case suite
+quarterly.</p>
+</div>
+
+<div class="card">
+<h4>The dossier's own best line, worth keeping verbatim</h4>
+<p class="q">"'Human verified' is a process description, not a permanent validity guarantee. Benchmark
+validity is conditional on the systems being evaluated — stronger systems expose latent task defects,
+so a recurring task-audit loop is required, not a one-time validation badge."</p>
+<p>That is the subscription argument in two sentences. It is better than anything in the strategy
+documents.</p>
+</div>
+
+<!-- ═══════════════ 8 COMPETE ═══════════════ -->
+<h2 id="compete">Stage 8</h2>
+<h3>Competitive landscape, refreshed</h3>
+
+<div class="tw">
+<table>
+<thead><tr><th>Player</th><th>What it actually is</th><th>Oracle</th><th>Assessment</th></tr></thead>
+<tbody>
+<tr><td class="big">Sigmabench</td><td>900 commits, 60 OSS repos, stratified by language × size. Private offering marketed but its own methodology page says private repos are unsupported.</td><td><span class="flag">File-level Jaccard index vs golden diff</span></td><td>Weakest oracle in the field. Measures diff similarity, not behaviour. Attack this directly.</td></tr>
+<tr><td class="big">Stet</td><td>Merged-PR replay; local-first, runs on your existing subscriptions. Closest shape to your idea.</td><td>Human PR's tests as gate, then LLM equivalence + review rubric above it</td><td>Sharp methodological observation: PR tasks are <strong>bimodal</strong>, so pass rate alone does not discriminate. Their Equivalence metric shows <strong>50 pp gaps between models with identical pass rates</strong>. No pricing, founders or entity disclosed.</td></tr>
+<tr><td class="big">RepoGauge</td><td>Open-source, local-first, mines bugfix commits from your history. Adds a router-training step.</td><td>Gold-patch validation + pass rate</td><td>Single maintainer, hosted platform not shipped. Your closest OSS competitor.</td></tr>
+<tr><td class="big">Brokk</td><td>Public "Power Ranking", 93 tasks from 5 OSS repos, 3 runs each, log-scaled build-failure score.</td><td>Tests + build failures</td><td>Claims "coding is solved" at &gt;90% pass rate — which means 93 tasks have lost discriminative power. Not a private-repo product.</td></tr>
+<tr><td class="big">Factory "Agent Readiness"</td><td>Scores a repo on how well it <em>supports</em> agents. 8 axes, 5 maturity levels, 60+ binary data points.</td><td><span class="flag">None — never runs an agent</span></td><td>Different category entirely. Claims variance dropped to 0.6% by grounding reports on prior reports — a technique worth stealing for any judged metric.</td></tr>
+<tr><td class="big">Sourcegraph CodeScaleBench</td><td>370 tasks, 40+ repos, 9 languages. Open source, published Mar 2026.</td><td>SWE-bench-style patch verification <em>plus</em> answer.json artifact comparison for comprehension tasks</td><td>A vendor A/B for their own MCP tools — but the two-mode oracle design is genuinely novel and worth copying for non-patch task families.</td></tr>
+<tr><td class="big">Proximal <span class="tag t-new">new</span></td><td>Founded 2026. Ex-Prime Intellect, Cursor, Browserbase, Jane Street. ~25 people, seed led by Scribble Ventures.</td><td>Researching <strong>"fuzzy verifiers"</strong> beyond binary correctness + reward-hack detection</td><td><strong>The most direct threat in this report.</strong> Same technical thesis, well-funded, working the oracle-quality problem explicitly.</td></tr>
+<tr><td class="big">Agent CI <span class="tag t-new">new</span></td><td>Literal "CI for agents" — <code>.agent-ci/</code> config, eval per PR, gates that block on degradation.</td><td>Bundled eval framework + custom Python validations</td><td>Waitlist only, no entity or funding disclosed. But <strong>they have your positioning and your name.</strong></td></tr>
+<tr><td class="big">Mechanize / Datacurve <span class="tag t-new">new</span></td><td>$9.1M and $17.7M respectively. High-fidelity RL environments and repo-wide environments with unit-test verifiers.</td><td>Execution verifiers</td><td>Selling to labs, not enterprises. Your Part-IX adjacent business, already funded.</td></tr>
+<tr><td class="big">DX / Jellyfish / Faros / Swarmia / LinearB</td><td>Telemetry and analytics. Jellyfish tracks agent PR volume and merge rates; Faros ships a 10-dimension GAINS score.</td><td><span class="flag">None — no counterfactual</span></td><td><strong>Still no evaluation capability as of Aug 2026.</strong> They measure what happened; only an eval measures what would have happened. DX lists an unspecified "Agent Ops Tools" product — the one thing to watch.</td></tr>
+<tr><td class="big">codeprobe</td><td colspan="3"><span class="flag">Could not be verified to exist.</span> No company, product, repository or paper found under that name. Remove it from the competitive set until a URL surfaces.</td></tr>
+</tbody></table>
+</div>
+
+<!-- ═══════════════ DECISIONS ═══════════════ -->
+<h2 id="decisions">Synthesis</h2>
+<h3>Concrete design decisions</h3>
+
+<div class="card good">
+<h4>Adopt now — cheap, high-value, this month</h4>
+<ol class="steps">
+<li><strong>Two-container grading boundary.</strong> Agent runs in container A with no test access; extract only the patch; apply and grade in fresh container B. Your current "outside the git root" is not a boundary and your own docs say so. Smallest change with the largest correctness gain.</li>
+<li><strong>Mutation hardening over <code>fallback-salts</code>.</strong> STING's method: 32 operator-based mutation rules across 7 categories, plus LLM semantic mutants, then the 12 behaviour-preserving transformations as an anti-overfitting gate. Produces your first oracle-strength number and turns the v1 finding from anecdote into metric.</li>
+<li><strong>Exit-code sentinel instead of log parsers.</strong> SWE-Factory's trick. 100% accuracy over 2,085 logs. Deletes a whole class of adapter maintenance.</li>
+<li><strong>error2pass check.</strong> Assert the pre-patch failure is an assertion failure, not an import/collection/syntax error.</li>
+<li><strong>Instrument cache hit rate.</strong> Both Codex and Claude Code report cached input tokens in their JSONL traces. One afternoon; replaces the biggest assumption in your cost model.</li>
+</ol>
+</div>
+
+<div class="card">
+<h4>Adopt at design-partner stage</h4>
+<ul>
+<li><strong>Inspect AI agent bridge for the model axis</strong>, container adapters for the harness axis. Removes your dependence on vendors exposing model flags.</li>
+<li><strong>Repo-quarter environment profiles</strong> — 48× storage reduction, and it makes local-first credible on a laptop.</li>
+<li><strong>mini-SWE-agent as the permanent control arm</strong> in every harness grid.</li>
+<li><strong>BenchJack's eight flaw classes</strong> as a red-team checklist, run iteratively to convergence rather than once.</li>
+<li><strong>SpecBench's visible-minus-hidden gap</strong> as a standing reward-hacking metric.</li>
+<li><strong>The 2.2%-yield qualification test</strong> — count candidate commit pairs in a customer's repo before asking for access.</li>
+</ul>
+</div>
+
+<div class="card warn">
+<h4>Reject, or defer explicitly</h4>
+<ul>
+<li><strong>Learned surrogate environments (SWE-World).</strong> Radical and interesting, but its fidelity against real Docker execution is unpublished. A reward model that can be gamed is a reward-hacking surface. Not for a product whose entire claim is verification.</li>
+<li><strong>Bug injection for the decision set.</strong> SWE-smith is cheap ($2.32/1,000) and useful for volume, but DeepSWE reported it gave "limited improvement" for RL and SWE-Playground reports poor out-of-domain transfer. Synthetic bugs are not your customer's bugs.</li>
+<li><strong>Generated-from-scratch projects.</strong> No customer relevance.</li>
+<li><strong>Mutation score as a headline product metric</strong> — see the conflict below.</li>
+</ul>
+</div>
+
+<!-- ═══════════════ CONFLICTS ═══════════════ -->
+<h2 id="conflicts">Open conflicts</h2>
+<h3>Four things this research does not resolve</h3>
+
+<div class="card warn">
+<h4>1. Mutation score may not measure what you want it to</h4>
+<p>The ISSTA 2026 replicability study (arXiv 2607.22880) finds coverage and mutation scores give
+meaningful cross-model signal in the <em>regression</em> setting — where code is assumed correct —
+but are <strong>not reliable indicators when the goal is exposing defects in buggy code</strong>.</p>
+<p>Your use case sits in between: you use mutants to test whether a suite can distinguish a correct
+patch from a wrong one, which is closer to regression than defect-detection. STING's own results
+(329 patches killed across 10 leading agents) suggest it works in practice. But you should
+<strong>validate it on your own capsules before making it the headline number</strong>, and report
+mutation survival alongside alternate-solution acceptance rather than alone.</p>
+</div>
+
+<div class="card warn">
+<h4>2. Your "refuse the LLM judge" doctrine has a counter-example</h4>
+<p>EvilGenie compared three reward-hack detectors and found held-out unit tests gave only minimal
+improvement over the alternatives, while an LLM judge was highly effective on unambiguous cases.
+Meanwhile Stet's Equivalence metric — which <em>is</em> an LLM judge — surfaces 50 pp gaps between
+models with identical pass rates, i.e. it discriminates where the execution gate cannot.</p>
+<p>The defensible position is narrower than "refuse the judge": <strong>execution is primary for
+correctness; a grounded, calibrated judge is primary for the things execution cannot see</strong> —
+scope, compatibility, maintainability, and whether a passing patch is a hack. Factory's
+report-grounding technique (variance 7% → 0.6%) is the mechanism for making judged metrics stable.
+Reposition rather than defend.</p>
+</div>
+
+<div class="card warn">
+<h4>3. Strict versus weak tests cannot both be fixed by the same method</h4>
+<p>OpenAI's 35.5%-narrow finding and STING's 77%-weak finding push in opposite directions.
+Hardening tests to kill mutants makes them <em>stricter</em>, which increases the false-negative rate
+against valid alternative implementations — and PatchDiff found <strong>46.8% of behavioural
+divergences were legitimate alternatives</strong>. Hardening without an alternate-solution control
+will manufacture the exact defect OpenAI deprecated SWE-bench for.</p>
+<p><strong>Mitigation:</strong> never harden without running the alternate-solution positive control
+afterwards. The DeepSWE benchmark's implementation-agnostic verifier design is the current best
+answer and matches what your <code>fallback-salts</code> capsule already does.</p>
+</div>
+
+<div class="card warn">
+<h4>4. The unpublished numbers that matter most</h4>
+<ul>
+<li><strong>R2E-Gym's stage-by-stage yield and pipeline cost</strong> — genuinely not published, and its Docker build scripts still rely on semi-manual dependency-pin searching. That is the un-automated bottleneck the whole lineage works around.</li>
+<li><strong>SWE-World's fidelity against real execution</strong> — the single number that would justify or kill learned environments.</li>
+<li><strong>SWE-Hub (Baidu)</strong> publishes a full production architecture with zero yields, task counts or costs.</li>
+<li><strong>No vendor in this space publishes list pricing.</strong> Sigmabench, Stet, RepoGauge, Factory, Vals AI, Agent CI — all demo-gated. You have no pricing anchor from competitors, only from adjacent categories.</li>
+</ul>
+</div>
+
+<hr class="rule"/>
+
+<div class="card good">
+<h4>The one-line read</h4>
+<p class="lead">The July dossier built the right <em>doctrine</em> and missed the <em>evidence</em>.
+Everything it proposed on oracles, tracks, manifests and governance survives contact with the 2026
+literature; what changes is that you now have published yields, a real power analysis, two better
+architectural primitives, and — in harness non-transitivity — a piece of third-party evidence for
+the core thesis that is stronger than anything you had before.</p>
+</div>
+
+<!-- ═══════════════ SOURCES ═══════════════ -->
+<h2 id="sources">Sources</h2>
+<h3>Primary references</h3>
+<p class="src" style="margin-bottom:20px">All arXiv identifiers verified against abstract pages.
+Figures attributed to vendors are marked as such in the body. Items the research could not verify
+against a primary source are flagged in red above.</p>
+
+<div class="srcgrid">
+<a href="https://arxiv.org/abs/2603.20691">SWE-Next — 2.2% yield, repo-quarter profiles · arXiv 2603.20691</a>
+<a href="https://arxiv.org/abs/2506.10954">SWE-Factory — exit-code harness, $0.024–0.045/instance · arXiv 2506.10954</a>
+<a href="https://arxiv.org/abs/2504.21798">SWE-smith — bug injection yields · arXiv 2504.21798</a>
+<a href="https://arxiv.org/abs/2504.07164">R2E-Gym — commit backtranslation · arXiv 2504.07164</a>
+<a href="https://arxiv.org/abs/2412.21139">SWE-Gym · arXiv 2412.21139</a>
+<a href="https://arxiv.org/abs/2509.08724">SWE-Mirror — issue replanting · arXiv 2509.08724</a>
+<a href="https://arxiv.org/abs/2602.03419">SWE-World — learned environments · arXiv 2602.03419</a>
+<a href="https://arxiv.org/abs/2602.03411">SWE-Master · arXiv 2602.03411</a>
+<a href="https://arxiv.org/abs/2512.12216">SWE-Playground — synthetic projects · arXiv 2512.12216</a>
+<a href="https://arxiv.org/abs/2603.00575">SWE-Hub (Baidu) · arXiv 2603.00575</a>
+<a href="https://arxiv.org/abs/2606.24855">OpenThoughts-Agent — data recipes · arXiv 2606.24855</a>
+<a href="https://www.together.ai/blog/deepswe">DeepSWE-Preview — the RL agent (Agentica / Together)</a>
+<a href="https://arxiv.org/abs/2607.07946">DeepSWE — the benchmark, implementation-agnostic verifiers · arXiv 2607.07946</a>
+<a href="https://arxiv.org/abs/2511.16108">SkyRL-Agent · arXiv 2511.16108</a>
+<a href="https://github.com/rllm-org/rllm">rLLM — RL training framework</a>
+<a href="https://www.primeintellect.ai/blog/environments">Prime Intellect Environments Hub + verifiers</a>
+<a href="https://arxiv.org/abs/2605.27922">Harness-Bench — 5,194 trajectories · arXiv 2605.27922</a>
+<a href="https://arxiv.org/abs/2606.12344">Claw-SWE-Bench — 54.3 pp adapter effect · arXiv 2606.12344</a>
+<a href="https://arxiv.org/html/2602.07150v2">On Randomness in Agentic Evals — 60,000 trajectories · arXiv 2602.07150</a>
+<a href="https://arxiv.org/abs/2605.23950">Stop Comparing LLM Agents Without Disclosing the Harness · arXiv 2605.23950</a>
+<a href="https://arxiv.org/abs/2607.03691">Don't Blame the LLM — 35 sequential CLI releases · arXiv 2607.03691</a>
+<a href="https://arxiv.org/abs/2604.03515">Inside the Scaffold — 13-agent source taxonomy · arXiv 2604.03515</a>
+<a href="https://arxiv.org/abs/2606.14249">HarnessX — automated harness composition · arXiv 2606.14249</a>
+<a href="https://arxiv.org/html/2605.20530v1">AgentAtlas — config-only rank inversion · arXiv 2605.20530</a>
+<a href="https://arxiv.org/abs/2510.11977">HAL — Holistic Agent Leaderboard, ICLR 2026 · arXiv 2510.11977</a>
+<a href="https://hal.cs.princeton.edu/reliability/">HAL Reliability Dashboard — pass^k</a>
+<a href="https://inspect.aisi.org.uk/agent-bridge.html">Inspect AI — agent bridge (API interception)</a>
+<a href="https://www.harborframework.com/docs/">Harbor — container-boundary harness abstraction</a>
+<a href="https://github.com/SWE-agent/mini-swe-agent">mini-SWE-agent — the minimal-scaffold control</a>
+<a href="https://www.tbench.ai/news/terminal-bench-2-1">Terminal-Bench 2.1 — 28 of 89 tasks patched</a>
+<a href="https://arxiv.org/abs/2604.01518">STING — 77% admit a wrong patch · arXiv 2604.01518</a>
+<a href="https://arxiv.org/abs/2503.15223">PatchDiff — differential patch testing, ICSE 2026 · arXiv 2503.15223</a>
+<a href="https://arxiv.org/abs/2506.09289">UTBoost — test augmentation, rank changes · arXiv 2506.09289</a>
+<a href="https://arxiv.org/html/2605.12673">BenchJack — benchmark red-teaming · arXiv 2605.12673</a>
+<a href="https://arxiv.org/html/2605.21384v1">SpecBench — reward-hacking gap metric · arXiv 2605.21384</a>
+<a href="https://arxiv.org/abs/2511.21654">EvilGenie — reward-hack detector comparison · arXiv 2511.21654</a>
+<a href="https://arxiv.org/html/2605.20744v1">Hack-Verifiable Environments · arXiv 2605.20744</a>
+<a href="https://arxiv.org/abs/2607.22880">Coverage & mutation score replicability, ISSTA 2026 · arXiv 2607.22880</a>
+<a href="https://arxiv.org/abs/2510.08996">Saving SWE-Bench — task-input mutation, CAIN 2026 · arXiv 2510.08996</a>
+<a href="https://arxiv.org/abs/2512.17419">SWE-Bench++ — 11,133 instances, 3,971 repos · arXiv 2512.17419</a>
+<a href="https://arxiv.org/abs/2512.18470">SWE-EVO — long-horizon software evolution · arXiv 2512.18470</a>
+<a href="https://arxiv.org/abs/2512.10218">Agent ability or model memory? · arXiv 2512.10218</a>
+<a href="https://arxiv.org/html/2604.01527v1">Meta ProdCodeBench · arXiv 2604.01527</a>
+<a href="https://openai.com/index/why-we-no-longer-evaluate-swe-bench-verified/">OpenAI — why we no longer evaluate SWE-bench Verified</a>
+<a href="https://arxiv.org/abs/2503.14443">EnvBench — 6.69% Python setup success · arXiv 2503.14443</a>
+<a href="https://arxiv.org/abs/2412.10133">ExecutionAgent · arXiv 2412.10133</a>
+<a href="https://arxiv.org/abs/2509.16941">SWE-bench Pro — public/held-out/commercial · arXiv 2509.16941</a>
+<a href="https://sigmabench.com/methodology/">Sigmabench — methodology</a>
+<a href="https://www.stet.sh/methodology">Stet — methodology</a>
+<a href="https://repogauge.org/">RepoGauge</a>
+<a href="https://brokk.ai/power-ranking">Brokk Power Ranking</a>
+<a href="https://factory.ai/product/agent-readiness">Factory — Agent Readiness</a>
+<a href="https://sourcegraph.com/blog/codescalebench-testing-coding-agents-on-large-codebases-and-multi-repo-software-engineering-tasks">Sourcegraph CodeScaleBench</a>
+<a href="https://www.proximal.ai/blog/frontierswe">Proximal — FrontierSWE, fuzzy verifiers</a>
+<a href="https://agent-ci.com/">Agent CI</a>
+<a href="https://www.hud.ai/">HUD — eval/RL environment platform</a>
+<a href="https://jellyfish.co/blog/new-in-ai-impact-agent-developer-insights-executive-reporting/">Jellyfish — Autonomous Agent Insights</a>
+<a href="https://www.faros.ai/platform/ai-transformation/gains">Faros GAINS</a>
+<a href="https://getdx.com/platform/dx-ai/">DX AI platform</a>
+</div>
+
+</div>
+</body>
+</html>

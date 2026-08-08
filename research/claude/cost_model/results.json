@@ -1,0 +1,366 @@
+{
+  "A_measured_run_costs": {
+    "gpt-5.5": {
+      "in_tok": 663652,
+      "out_tok": 8450,
+      "sec": 197.1,
+      "cost_nocache": 3.572,
+      "cost_cache50": 2.079,
+      "cost_cache85": 1.033,
+      "cost_cache92": 0.824
+    },
+    "gpt-5.4": {
+      "in_tok": 487121,
+      "out_tok": 7201,
+      "sec": 158.5,
+      "cost_nocache": 1.326,
+      "cost_cache50": 0.778,
+      "cost_cache85": 0.394,
+      "cost_cache92": 0.317
+    },
+    "gpt-5.4-mini": {
+      "in_tok": 1031987,
+      "out_tok": 20713,
+      "sec": 324.9,
+      "cost_nocache": 0.867,
+      "cost_cache50": 0.519,
+      "cost_cache85": 0.275,
+      "cost_cache92": 0.226
+    }
+  },
+  "B_per_task_by_model": {
+    "Claude Fable 5": {
+      "tier": "frontier",
+      "pass_rate_assumed": 0.6,
+      "per_attempt": 2.7,
+      "per_solved": 4.5,
+      "per_solved_nocache": 17.198
+    },
+    "Claude Opus 5": {
+      "tier": "frontier",
+      "pass_rate_assumed": 0.6,
+      "per_attempt": 1.35,
+      "per_solved": 2.25,
+      "per_solved_nocache": 8.599
+    },
+    "Claude Sonnet 5": {
+      "tier": "frontier",
+      "pass_rate_assumed": 0.6,
+      "per_attempt": 0.54,
+      "per_solved": 0.9,
+      "per_solved_nocache": 3.44
+    },
+    "Claude Sonnet 5 (Sep+)": {
+      "tier": "frontier",
+      "pass_rate_assumed": 0.6,
+      "per_attempt": 0.81,
+      "per_solved": 1.35,
+      "per_solved_nocache": 5.159
+    },
+    "Claude Haiku 4.5": {
+      "tier": "cheap",
+      "pass_rate_assumed": 0.33,
+      "per_attempt": 0.711,
+      "per_solved": 2.153,
+      "per_solved_nocache": 8.228
+    },
+    "GPT-5.6 Sol": {
+      "tier": "frontier",
+      "pass_rate_assumed": 0.6,
+      "per_attempt": 1.261,
+      "per_solved": 2.102,
+      "per_solved_nocache": 7.071
+    },
+    "GPT-5.6 Terra": {
+      "tier": "frontier",
+      "pass_rate_assumed": 0.6,
+      "per_attempt": 0.505,
+      "per_solved": 0.841,
+      "per_solved_nocache": 2.828
+    },
+    "GPT-5.5": {
+      "tier": "frontier",
+      "pass_rate_assumed": 0.6,
+      "per_attempt": 1.261,
+      "per_solved": 2.102,
+      "per_solved_nocache": 7.071
+    },
+    "GPT-5.4": {
+      "tier": "frontier",
+      "pass_rate_assumed": 0.6,
+      "per_attempt": 0.631,
+      "per_solved": 1.051,
+      "per_solved_nocache": 3.536
+    },
+    "GPT-5.4 mini": {
+      "tier": "cheap",
+      "pass_rate_assumed": 0.33,
+      "per_attempt": 0.498,
+      "per_solved": 1.509,
+      "per_solved_nocache": 5.075
+    },
+    "GPT-5.6 Luna": {
+      "tier": "cheap",
+      "pass_rate_assumed": 0.33,
+      "per_attempt": 0.133,
+      "per_solved": 0.402,
+      "per_solved_nocache": 1.353
+    },
+    "GLM-5.2": {
+      "tier": "open",
+      "pass_rate_assumed": 0.5,
+      "per_attempt": 0.634,
+      "per_solved": 1.268,
+      "per_solved_nocache": 3.622
+    },
+    "GLM-5": {
+      "tier": "open",
+      "pass_rate_assumed": 0.5,
+      "per_attempt": 0.454,
+      "per_solved": 0.908,
+      "per_solved_nocache": 2.589
+    },
+    "Kimi K2.6": {
+      "tier": "open",
+      "pass_rate_assumed": 0.5,
+      "per_attempt": 0.449,
+      "per_solved": 0.898,
+      "per_solved_nocache": 2.495
+    },
+    "Kimi K2.7 Code": {
+      "tier": "open",
+      "pass_rate_assumed": 0.5,
+      "per_attempt": 0.449,
+      "per_solved": 0.898,
+      "per_solved_nocache": 2.495
+    },
+    "DeepSeek V4 Pro": {
+      "tier": "open",
+      "pass_rate_assumed": 0.5,
+      "per_attempt": 0.141,
+      "per_solved": 0.282,
+      "per_solved_nocache": 1.095
+    },
+    "DeepSeek V4 Flash": {
+      "tier": "open",
+      "pass_rate_assumed": 0.5,
+      "per_attempt": 0.046,
+      "per_solved": 0.092,
+      "per_solved_nocache": 0.356
+    },
+    "MiniMax M3": {
+      "tier": "open",
+      "pass_rate_assumed": 0.5,
+      "per_attempt": 0.393,
+      "per_solved": 0.785,
+      "per_solved_nocache": 0.785
+    },
+    "Qwen3.5 Plus": {
+      "tier": "open",
+      "pass_rate_assumed": 0.5,
+      "per_attempt": 0.538,
+      "per_solved": 1.077,
+      "per_solved_nocache": 1.077
+    },
+    "Qwen3.7 Flash": {
+      "tier": "open",
+      "pass_rate_assumed": 0.5,
+      "per_attempt": 0.039,
+      "per_solved": 0.079,
+      "per_solved_nocache": 0.079
+    }
+  },
+  "C_difficulty_ladder": {
+    "Claude Opus 5": {
+      "T1 trivial (dep bump, lint fix)": 0.79,
+      "T2 small (bug fix from issue)": 1.57,
+      "T3 medium (feature w/ spec) = anchor": 2.25,
+      "T4 hard (multi-file, large repo)": 6.75,
+      "T5 very hard (monorepo, long horizon)": 14.62
+    },
+    "GPT-5.4": {
+      "T1 trivial (dep bump, lint fix)": 0.37,
+      "T2 small (bug fix from issue)": 0.74,
+      "T3 medium (feature w/ spec) = anchor": 1.05,
+      "T4 hard (multi-file, large repo)": 3.15,
+      "T5 very hard (monorepo, long horizon)": 6.83
+    },
+    "GLM-5.2": {
+      "T1 trivial (dep bump, lint fix)": 0.44,
+      "T2 small (bug fix from issue)": 0.89,
+      "T3 medium (feature w/ spec) = anchor": 1.27,
+      "T4 hard (multi-file, large repo)": 3.8,
+      "T5 very hard (monorepo, long horizon)": 8.24
+    },
+    "DeepSeek V4 Pro": {
+      "T1 trivial (dep bump, lint fix)": 0.1,
+      "T2 small (bug fix from issue)": 0.2,
+      "T3 medium (feature w/ spec) = anchor": 0.28,
+      "T4 hard (multi-file, large repo)": 0.84,
+      "T5 very hard (monorepo, long horizon)": 1.83
+    },
+    "GPT-5.4 mini": {
+      "T1 trivial (dep bump, lint fix)": 0.53,
+      "T2 small (bug fix from issue)": 1.06,
+      "T3 medium (feature w/ spec) = anchor": 1.51,
+      "T4 hard (multi-file, large repo)": 4.53,
+      "T5 very hard (monorepo, long horizon)": 9.81
+    }
+  },
+  "D_harness_overhead": {
+    "lean (mini-SWE-agent / Aider)": 0.58,
+    "Codex CLI": 1.05,
+    "Claude Code": 1.42,
+    "OpenHands": 1.68,
+    "context-heavy internal": 2.31
+  },
+  "D2_databricks_check": {
+    "published_GLM_5.2_per_task": 1.28,
+    "modelled_GLM_5.2_per_attempt_T4": 1.9,
+    "published_Opus_4.8_per_task": 1.94,
+    "modelled_Opus_5_per_attempt_T4": 4.05,
+    "HAL_swebench_per_task_range": "0.13 - 0.73",
+    "modelled_GPT_5.4_per_attempt_T2": 0.44
+  },
+  "E_scenarios": {
+    "S1 nightly smoke": {
+      "n_tasks": 20,
+      "k": 1,
+      "configs": 1,
+      "trajectories": 20,
+      "difficulty": 0.7,
+      "total": 9.0,
+      "per_config": {
+        "GPT-5.4": 9.0
+      },
+      "note": "1 production config, easy tasks, k=1 - guardrail only"
+    },
+    "S2 weekly regression (config change)": {
+      "n_tasks": 60,
+      "k": 3,
+      "configs": 2,
+      "trajectories": 360,
+      "difficulty": 1.0,
+      "total": 227.0,
+      "per_config": {
+        "GPT-5.4": 114.0
+      },
+      "note": "A/B of two AGENTS.md variants, same model"
+    },
+    "S3 pilot bake-off (realistic)": {
+      "n_tasks": 30,
+      "k": 5,
+      "configs": 4,
+      "trajectories": 600,
+      "difficulty": 1.0,
+      "total": 292.0,
+      "per_config": {
+        "Claude Sonnet 5": 81.0,
+        "GPT-5.4": 95.0,
+        "GLM-5.2": 95.0,
+        "DeepSeek V4 Pro": 21.0
+      },
+      "note": "4 configs, 30 tasks, k=5 -> MDE ~12.5pp"
+    },
+    "S4 release gate (teardown spec)": {
+      "n_tasks": 200,
+      "k": 5,
+      "configs": 6,
+      "trajectories": 6000,
+      "difficulty": 1.0,
+      "total": 4865.0,
+      "per_config": {
+        "Claude Opus 5": 1350.0,
+        "Claude Sonnet 5": 540.0,
+        "GPT-5.6 Sol": 1261.0,
+        "GPT-5.4": 631.0,
+        "GLM-5.2": 634.0,
+        "Kimi K2.6": 449.0
+      },
+      "note": "the 6,000-trajectory sweep from the teardown"
+    },
+    "S4b release gate + sequential stopping": {
+      "n_tasks": 200,
+      "k": 5,
+      "configs": 6,
+      "trajectories": 6000,
+      "difficulty": 1.0,
+      "total": 2433.0,
+      "per_config": {
+        "Claude Opus 5": 675.0,
+        "Claude Sonnet 5": 270.0,
+        "GPT-5.6 Sol": 631.0,
+        "GPT-5.4": 315.0,
+        "GLM-5.2": 317.0,
+        "Kimi K2.6": 224.0
+      },
+      "note": "same, with 50% compute killed early"
+    },
+    "S5 hard-task gate (enterprise monorepo)": {
+      "n_tasks": 100,
+      "k": 5,
+      "configs": 4,
+      "trajectories": 2000,
+      "difficulty": 3.0,
+      "total": 2918.0,
+      "per_config": {
+        "Claude Sonnet 5": 810.0,
+        "GPT-5.4": 946.0,
+        "GLM-5.2": 951.0,
+        "DeepSeek V4 Pro": 211.0
+      },
+      "note": "T4 hard tasks, big repo context"
+    },
+    "S6 cheap-model screen": {
+      "n_tasks": 200,
+      "k": 5,
+      "configs": 4,
+      "trajectories": 4000,
+      "difficulty": 1.0,
+      "total": 1888.0,
+      "per_config": {
+        "Claude Haiku 4.5": 711.0,
+        "GPT-5.4 mini": 498.0,
+        "DeepSeek V4 Pro": 141.0,
+        "Qwen3.5 Plus": 538.0
+      },
+      "note": "screening pass on cheap tier before spending on frontier"
+    }
+  },
+  "F_cache_sensitivity": {
+    "0% cache hit": 16645.0,
+    "30% cache hit": 12487.0,
+    "50% cache hit": 9716.0,
+    "70% cache hit": 6944.0,
+    "85% cache hit": 4865.0,
+    "92% cache hit": 3895.0
+  },
+  "G_annual_one_customer_ENTERPRISE": {
+    "assumptions": "difficulty 2.0 (T3/T4 blend), Claude Code harness (1.35x), 85% cache",
+    "nightly_smoke_per_run": 34.0,
+    "weekly_regression_per_run": 613.0,
+    "release_gate_per_run": 6568.0,
+    "nightly_x250": 8515.0,
+    "weekly_x52": 31879.0,
+    "gates_x8": 52543.0,
+    "TOTAL_ANNUAL": 92937.0
+  },
+  "G2_worst_case": {
+    "note": "no prompt caching, context-heavy internal harness, all T4 hard tasks",
+    "single_release_gate": 109858.0,
+    "annual_8_gates": 878863.0
+  },
+  "I_build_side_one_repo": {
+    "candidates_to_mine_for_200_tasks": 571.0,
+    "mining_llm_cost": 25.71,
+    "llm_semantic_mutants": 17.15,
+    "mutant_test_execution_compute": 48.0,
+    "TOTAL_BUILD": 90.86
+  },
+  "H_infra": {
+    "per_trajectory_usd": 0.0167,
+    "S4_infra_total": 100.0,
+    "S4_api_total": 4865.0,
+    "infra_share_pct": 2.06
+  }
+}
