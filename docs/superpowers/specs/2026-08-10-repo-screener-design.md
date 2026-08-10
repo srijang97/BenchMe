@@ -188,10 +188,32 @@ and 3 can be chosen for maximum difference later without re-running Tier A.
 | G1 | Python + pytest detected | v1 ecosystem, per decision register in `PROJECT_KNOWLEDGE_BASE.md` §17 |
 | G2 | `candidate_pairs ≥ 360` | ≥8 capsules at the conservative 2.2% conversion — the stated pivot floor |
 | G3 | `commits_since_cutoff ≥ 30` | a fresh, contamination-resistant stream exists at all |
-| G4 | `test_map_ratio ≥ 0.5` | mutation hardening is affordable only with targeted test selection |
 | G5 | no compiled extension built **from source** in this repo | environment reconstruction cost |
 | G6 | no service dependency on the default test path | hermeticity |
 | G7 | lockfile present or dependencies fully pinned | determinism |
+
+**G4 was withdrawn as a gate on 2026-08-10** and `test_map_ratio` demoted to a
+reported column. Gate ids are not renumbered — G4 is retired, not reused.
+
+The first live sweep eliminated all three trial repositories, two of them on G4,
+and investigation showed the metric does not measure what it was justified by.
+`test_map_ratio` was introduced as a proxy for whether targeted test selection is
+possible, because that decides whether mutation hardening is affordable. But
+targeted selection addresses the *test* file — `pytest tests/test_basic.py::test_x`
+runs regardless of whether a source module named `basic.py` exists. What the ratio
+actually measures is whether a project names test files after source modules, and
+mature projects routinely use feature-based names instead (`test_edge_cases.py`,
+`test_appctx.py`). Click is 100% feature-named and scored 0.18.
+
+The deeper point: capsules are mined from commits that touch source **and** tests,
+so a capsule's fail-to-pass tests come from the commit itself. Mutation hardening
+runs those specific tests. Name-based mapping is never required for the purpose G4
+was defended by, and Tier B's `targeted_latency` measures the real constraint
+empirically on finalists.
+
+`test_map_ratio` and `test_map_ambiguous` are still computed and reported, so the
+distribution across the full candidate set is visible and any future threshold can
+be argued from data rather than from a prior.
 
 **G5 reads narrowly and deliberately.** It excludes repos that build C/Rust/Cython *as part of their
 own package* — where you would spend the project debugging a build toolchain. It does not exclude

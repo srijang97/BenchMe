@@ -976,11 +976,16 @@ def _g7(r):
     return None
 
 
+# G4 (test_map_ratio >= 0.5) was WITHDRAWN 2026-08-10 after the first live sweep
+# eliminated all three trial repos, two of them on G4. The metric measures whether
+# a project names test files after source modules, not whether targeted test
+# selection is possible -- `pytest tests/test_basic.py::test_x` runs regardless.
+# test_map_ratio is still computed and reported; it just no longer eliminates.
+# _g4 is retained, unused, so the id is not silently reused.
 TIER_A_GATES = [
     ("G1", "Python + pytest detected", _g1),
     ("G2", "candidate_pairs >= 360", _g2),
     ("G3", "commits_since_cutoff >= 30", _g3),
-    ("G4", "test_map_ratio >= 0.5", _g4),
     ("G5", "no compiled extension built from source", _g5),
     ("G6", "no service dependency on default test path", _g6),
     ("G7", "lockfile or pinned dependencies present", _g7),
