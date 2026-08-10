@@ -108,10 +108,6 @@ PYTEST_CONFIG_NAMES = ("pyproject.toml", "tox.ini", "setup.cfg", "pytest.ini")
 PINNED_MIN = 0.8
 PIN_MARKERS = ("==", " @ ")
 
-# conftest.py is test *support*: it is a test file by location but can never
-# name a source file, so counting it only depresses the mapping ratio.
-TEST_MAP_EXCLUDE = {"conftest.py"}
-
 REVERT = re.compile(r'^Revert "')
 HOTFIX = re.compile(r"\b(hotfix|regression|fixup)\b", re.I)
 
@@ -139,6 +135,22 @@ def _is_pytest_layout(path):
     return len(parts) == 1 or "tests" in parts[:-1]
 
 
+def _test_target_stem(path):
+    """The source stem a test file names, or None if it follows no convention.
+
+    Support code living in a tests directory -- conftest.py, __init__.py,
+    helpers.py -- names no source file and never can, so it must not sit in
+    the ratio's denominator dragging it below G4's threshold. Being inside a
+    tests directory makes a file a test file; only its *name* makes it a test.
+    """
+    stem = PurePosixPath(path).stem
+    if stem.startswith("test_"):
+        return stem[len("test_"):]
+    if stem.endswith("_test"):
+        return stem[: -len("_test")]
+    return None
+
+
 def _test_map_counts(tracked):
     """(matched, ambiguous, total) for the test-to-source naming map.
 
@@ -148,7 +160,7 @@ def _test_map_counts(tracked):
     NOT possible, so the ambiguity is recorded rather than credited.
     """
     tests = [t for t in tracked
-             if is_test_file(t) and PurePosixPath(t).name not in TEST_MAP_EXCLUDE]
+             if is_test_file(t) and _test_target_stem(t) is not None]
     if not tests:
         return 0, 0, 0
 
@@ -160,14 +172,7 @@ def _test_map_counts(tracked):
     matched = 0
     ambiguous = 0
     for t in tests:
-        stem = PurePosixPath(t).stem
-        if stem.startswith("test_"):
-            target = stem[len("test_"):]
-        elif stem.endswith("_test"):
-            target = stem[: -len("_test")]
-        else:
-            continue
-        hits = by_stem.get(target, ())
+        hits = by_stem.get(_test_target_stem(t), ())
         if len(hits) == 1:
             matched += 1
         elif len(hits) > 1:
@@ -183,8 +188,35 @@ def test_map_ratio(tracked):
     return matched / total
 
 
+def _is_requirements_file(path):
+    """A pip requirements file, found by path rather than basename alone.
+
+    Covers both the flat `requirements-dev.txt` form and the split
+    `requirements/base.txt` layout, at any depth. `.in` files are excluded by
+    the `.txt` suffix requirement, deliberately: a pip-compile `.in` is the
+    unpinned SOURCE, and the pinned artefact is the `.txt` it generates.
+    Counting the `.in` would dilute the ratio and fail a fully pinned repo.
+    """
+    p = PurePosixPath(path)
+    if p.suffix != ".txt":
+        return False
+    if p.name.startswith("requirements"):
+        return True
+    return "requirements" in p.parts[:-1]
+
+
 def _requirements_pinned(repo, req_files):
-    """True when at least PINNED_MIN of declared requirement lines carry a pin."""
+    """Tri-state pinning verdict over the requirements population.
+
+    True  -- at least PINNED_MIN of dependency lines carry a version pin.
+    False -- they do not.
+    None  -- there were no dependency lines to judge, so there is no evidence
+             either way and G7 must not be failed on this alone.
+
+    Lines beginning with `-` are pip directives (`-r base.txt`, `-e .`,
+    `--index-url`), not dependencies. Counting them as unpinned is a category
+    error that scores an all-include stub at 0% and eliminates the repo.
+    """
     total = 0
     pinned = 0
     for t in req_files:
@@ -194,13 +226,13 @@ def _requirements_pinned(repo, req_files):
             continue
         for line in body.splitlines():
             line = line.strip()
-            if not line or line.startswith("#"):
+            if not line or line.startswith("#") or line.startswith("-"):
                 continue
             total += 1
             if any(marker in line for marker in PIN_MARKERS):
                 pinned += 1
     if not total:
-        return False
+        return None
     return (pinned / total) >= PINNED_MIN
 
 
@@ -209,13 +241,14 @@ def detect_environment(repo, tracked):
     lockfile = next((lf for lf in LOCKFILES if lf in names), None)
     requirements_unpinned = False
     if lockfile is None:
-        req_files = [t for t in tracked
-                     if PurePosixPath(t).name.startswith("requirements")]
+        req_files = [t for t in tracked if _is_requirements_file(t)]
         if req_files:
-            if _requirements_pinned(repo, req_files):
+            verdict = _requirements_pinned(repo, req_files)
+            if verdict is True:
                 lockfile = "requirements"
-            else:
+            elif verdict is False:
                 requirements_unpinned = True
+            # verdict is None: nothing to judge, so no evidence either way.
 
     compiled = [
         t for t in tracked
@@ -263,8 +296,7 @@ def detect_environment(repo, tracked):
         "lockfile": lockfile,
         "requirements_unpinned": requirements_unpinned,
         "has_pyproject": "pyproject.toml" in names,
-        "has_ci": any(any(t.startswith(d) or t == d for d in CI_DIRS)
-                      for t in tracked),
+        "has_ci": any(_under_ci(t) for t in tracked),
         "has_container": ("Dockerfile" in names
                           or "devcontainer.json" in names),
         "compiled_markers": sorted(set(compiled)),
