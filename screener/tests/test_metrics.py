@@ -40,6 +40,20 @@ def test_candidate_pair_definition(tmp_path):
     wide = {f"src/w{i}.py": f"x={i}" for i in range(10)}
     wide["tests/test_wide.py"] = "assert 1"
     commit(repo, wide, "eleven files")
+    # Fix round 1, finding 1: "test" (singular) no longer marks a directory as
+    # tests, so django/test/client.py is now correctly source, not test. This
+    # commit touches it alongside another real source file and no real test
+    # file, so it must not count -- previously the buggy directory check would
+    # have wrongly called django/test/client.py a test and inflated this into
+    # a false-positive pair.
+    commit(repo, {"django/test/client.py": "x=5", "src/extra.py": "x=6"},
+           "django test dir is production source")
+    # Fix round 1, finding 2: setup.py is packaging, not behavioural source,
+    # so pairing it with a real test file must not count -- there is no
+    # source file in this commit once setup.py is excluded.
+    commit(repo, {"setup.py": "from setuptools import setup",
+                  "tests/test_setup.py": "assert 1"},
+           "setup.py is not source")
 
     commits = gitmeta.log_commits(repo)
     pairs = [c for c in commits if metrics.is_candidate_pair(c)]

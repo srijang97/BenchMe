@@ -11,7 +11,10 @@ FLD = "\x1f"
 
 # --name-only, never --numstat. Line counts force blob fetches and defeat the
 # blobless clone. See spec section 2.
-PRETTY = f"{REC}%H{FLD}%an <%ae>{FLD}%cn <%ce>{FLD}%aI{FLD}%s{FLD}%b{FLD}"
+# %P: space-separated parent SHAs, empty for a root commit. Lets callers
+# self-enforce a no-merges rule instead of relying on `git log --no-merges`
+# being present upstream. See screener/metrics.py:is_candidate_pair.
+PRETTY = f"{REC}%H{FLD}%P{FLD}%an <%ae>{FLD}%cn <%ce>{FLD}%aI{FLD}%s{FLD}%b{FLD}"
 
 
 @dataclass
@@ -23,6 +26,7 @@ class Commit:
     subject: str
     body: str
     files: list[str] = field(default_factory=list)
+    parents: list[str] = field(default_factory=list)
 
 
 def _text(value):
@@ -145,13 +149,15 @@ def log_commits(repo):
         if not chunk.strip():
             continue
         parts = chunk.split(FLD)
-        if len(parts) < 7:
+        if len(parts) < 8:
             continue
-        sha, author, committer, date, subject, body = parts[:6]
-        files = [ln.strip() for ln in parts[6].splitlines() if ln.strip()]
+        sha, parents_str, author, committer, date, subject, body = parts[:7]
+        files = [ln.strip() for ln in parts[7].splitlines() if ln.strip()]
+        parents = parents_str.split()
         commits.append(Commit(
             sha=sha.strip(), author=author, committer=committer,
             date=date, subject=subject, body=body, files=files,
+            parents=parents,
         ))
     return commits
 
