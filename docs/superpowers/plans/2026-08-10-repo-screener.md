@@ -24,6 +24,8 @@
 - **Freshness cutoff** defaults to `2026-05-01`, configurable via `--cutoff`.
 - **Finalist count** N defaults to `4`, configurable via `--top`.
 - **Conversion constant** for projected yield is `0.022`, defined once as `CONVERSION_RATE` in `metrics.py`.
+- **Tasks 7–9 have a human in the loop by design.** Spec §4.1 makes `operator_minutes` a typed-in number because it is the leading indicator on the services-trap gate; a fabricated value corrupts it. These tasks need Docker Desktop running and an interactive terminal, so they are **not suitable for autonomous subagent execution**. Tasks 1–6 are fully non-interactive.
+- **Docker is invoked with forward-slashed host paths** via `tierb.host_path()`, and with `MSYS_NO_PATHCONV=1` set. Backslashed sources collide with the `-v SRC:DEST` separator on Windows.
 
 ---
 
@@ -59,6 +61,7 @@
   - `load_candidates(path: str) -> list[dict]` — each dict has keys `name`, `url`, `tag`, `note`
   - `read_records(path: str) -> dict[str, dict]` — maps `name` to its last record
   - `append_record(path: str, record: dict) -> None`
+  - `operator_minutes_for(name: str, args) -> int` — non-interactive when supplied, fails closed otherwise
   - `OUT = Path("screener/out")`, `TIER_A = OUT/"tier_a.jsonl"`, `TIER_B = OUT/"tier_b.jsonl"`, `LOGS = OUT/"logs"`
 
 - [ ] **Step 1: Create the directory layout**
@@ -225,6 +228,28 @@ def is_done(record):
     return status in TERMINAL or status.startswith("gated:")
 
 
+def operator_minutes_for(name, args):
+    """Minutes the operator spent getting this repo's suite green.
+
+    Spec section 4.1 makes this a human-supplied number on purpose: it is the
+    leading indicator on the services-trap gate. It therefore FAILS CLOSED
+    rather than defaulting to 0 -- a silently fabricated 0 would corrupt the
+    one metric that says whether this is a product or a consultancy.
+    """
+    mapping = {}
+    for pair in getattr(args, "operator_minutes", []) or []:
+        key, _, value = pair.partition("=")
+        mapping[key.strip()] = value.strip()
+    if name in mapping:
+        return int(mapping[name])
+    if sys.stdin.isatty():
+        return int(input(f"  operator minutes spent on {name}: ").strip() or 0)
+    raise SystemExit(
+        f"operator_minutes for '{name}' was not supplied and stdin is not a "
+        f"terminal. Re-run with --operator-minutes {name}=<minutes>."
+    )
+
+
 def cmd_tier_a(args):
     print("tier-a not implemented yet", file=sys.stderr)
     return 1
@@ -253,6 +278,10 @@ def main(argv=None):
     b = sub.add_parser("tier-b", help="container build and suite measurement, finalists only")
     b.add_argument("--top", type=int, default=4)
     b.add_argument("--force", action="store_true")
+    b.add_argument("--operator-minutes", action="append", default=[],
+                   metavar="NAME=MINUTES",
+                   help="minutes you spent per repo, e.g. --operator-minutes click=35. "
+                        "Required when stdin is not a terminal.")
     b.set_defaults(func=cmd_tier_b)
 
     r = sub.add_parser("report", help="render REPORT.md")
@@ -1283,6 +1312,7 @@ Expected: a version string. If it errors, launch Docker Desktop and retry before
 Never synthesises an environment. Descends a ladder and records which rung
 worked; the rung is itself the qualification signal.
 """
+import os
 import re
 import subprocess
 from pathlib import Path, PurePosixPath
@@ -1323,6 +1353,20 @@ RUN uv pip install --system pytest || true
 """
 
 
+def host_path(p):
+    """Docker Desktop wants forward slashes: C:/Users/... not C:\\Users\\...
+
+    A backslashed source in `-v SRC:/repo` is fragile because the drive-letter
+    colon collides with the separator. Forward slashes are the reliable form.
+    """
+    return str(Path(p).resolve()).replace("\\", "/")
+
+
+def docker_env():
+    """Defensive: stop MSYS/Git Bash rewriting container-side paths like /repo."""
+    return dict(os.environ, MSYS_NO_PATHCONV="1", MSYS2_ARG_CONV_EXCL="*")
+
+
 def build_image(repo, name, rung, log_dir):
     repo = Path(repo)
     log_dir = Path(log_dir)
@@ -1332,16 +1376,18 @@ def build_image(repo, name, rung, log_dir):
     if rung == 2:
         dockerfile = next(
             p for p in repo.rglob("Dockerfile") if p.is_file())
-        cmd = ["docker", "build", "-f", str(dockerfile), "-t", tag, str(repo)]
+        cmd = ["docker", "build", "-f", host_path(dockerfile), "-t", tag,
+               host_path(repo)]
     else:
         # Rungs 1, 3 and 4 all end up here: write a generic uv image and let
         # the repo's own pins do the work. Record the rung that was DETECTED,
         # not the mechanism used to build.
         generated = repo / "Dockerfile.screener"
         generated.write_text(_dockerfile_for_rung4(repo), encoding="utf-8")
-        cmd = ["docker", "build", "-f", str(generated), "-t", tag, str(repo)]
+        cmd = ["docker", "build", "-f", host_path(generated), "-t", tag,
+               host_path(repo)]
 
-    proc = subprocess.run(cmd, capture_output=True, text=True,
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=docker_env(),
                           encoding="utf-8", errors="replace", timeout=3600)
     with open(log_dir / "docker-build.log", "w", encoding="utf-8") as fh:
         fh.write(proc.stdout + "\n" + proc.stderr)
@@ -1349,12 +1395,12 @@ def build_image(repo, name, rung, log_dir):
 
 
 def run_in(image, repo, argv, network, log_path, timeout=3600):
-    cmd = ["docker", "run", "--rm", "-v", f"{Path(repo).resolve()}:/repo",
+    cmd = ["docker", "run", "--rm", "-v", f"{host_path(repo)}:/repo",
            "-w", "/repo"]
     if not network:
         cmd += ["--network", "none"]
     cmd += [image, *argv]
-    proc = subprocess.run(cmd, capture_output=True, text=True,
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=docker_env(),
                           encoding="utf-8", errors="replace", timeout=timeout)
     Path(log_path).parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "w", encoding="utf-8") as fh:
@@ -1530,8 +1576,7 @@ def cmd_tier_b(args):
             append_record(TIER_B, record)
             continue
 
-        raw = input(f"  operator minutes spent on {name}: ").strip()
-        record["operator_minutes"] = int(raw or 0)
+        record["operator_minutes"] = operator_minutes_for(name, args)
         record.update(tierb.measure(image, repo, log_dir))
         record.update(tierb.budgets(record))
         status, reason = gates.evaluate_tier_b(record)
@@ -1548,7 +1593,13 @@ cd /c/Users/Srijan/Documents/BenchMe
 python screener/screen.py --candidates screener/subset.yaml tier-b --top 1
 ```
 
-Expected: a rung line, a build, an `operator minutes` prompt (type the real number), then a status line. `screener/out/tier_b.jsonl` gains one record containing `flake_rate`, `suite_runtime_p50`, `targeted_latency_warm`, `hardening_hours` and `verification_hours`.
+Expected: a rung line, a build, an `operator minutes` prompt, then a status line. `screener/out/tier_b.jsonl` gains one record containing `flake_rate`, `suite_runtime_p50`, `targeted_latency_warm`, `hardening_hours` and `verification_hours`.
+
+Type the **real** number of minutes you spent — it is the services-trap indicator, not decoration. If stdin is not a terminal the command exits with instructions rather than guessing; supply the value explicitly instead:
+
+```bash
+python screener/screen.py --candidates screener/subset.yaml tier-b --top 1 --operator-minutes click=35
+```
 
 - [ ] **Step 4: Regenerate the report and confirm sections 4 and 5 populate**
 
@@ -1605,7 +1656,7 @@ cd /c/Users/Srijan/Documents/BenchMe
 python screener/screen.py tier-b --top 4
 ```
 
-Expected: four rung/build/measure cycles with an operator-minutes prompt each. Docker build time dominates; budget an hour or more.
+Expected: four rung/build/measure cycles with an operator-minutes prompt each. Docker build time dominates; budget an hour or more. Run this from an interactive terminal, or pass `--operator-minutes NAME=N` once per finalist.
 
 - [ ] **Step 4: Generate the final report**
 
@@ -1686,5 +1737,10 @@ git commit -m "docs: log repo screener session and corpus decision"
 **Spec coverage.** §1 framing → Task 9 log entry and spec reference. §2 architecture, clone rule, resumability → Tasks 1, 2, 5. §3.1 candidate-pair rule → Task 3. §3.2 metrics → Tasks 3–4. §3.3 gates G1–G7 → Task 5. §3.4 ranking → Task 5. §4.1 environment ladder → Task 7. §4.2 measurements → Task 8. §4.3 budgets → Task 8. §4.4 gates B1–B4 → Task 5 (`gates.py` holds both tiers). §5 candidate set → Task 1. §6 failure semantics → Tasks 1 and 5. §7 testing → Tasks 3–4. §8 output → Task 6. §9 open questions → carried into the Task 9 log entry.
 
 **One deliberate deviation, recorded here rather than silently:** spec §3.2 lists `commits_180d`; the plan drops it in favour of `commits_since_cutoff`, which answers the same liveness question and is what G3 gates on. Two overlapping liveness counters would invite disagreement in the report.
+
+**Two defects found and patched before execution:**
+
+1. `cmd_tier_b` originally called `input()` unconditionally, which raises `EOFError` under any non-interactive runner. Replaced with `operator_minutes_for()`: takes `--operator-minutes NAME=N` when supplied, prompts only on a real terminal, and **fails closed** otherwise. Defaulting to 0 was rejected — spec §4.1 makes this a human judgement precisely because it is the services-trap indicator, and a silent 0 would read as free onboarding.
+2. Docker `-v` used `Path(repo).resolve()`, producing a backslashed Windows path whose drive-letter colon collides with the `SRC:DEST` separator. Replaced with `tierb.host_path()` (forward slashes) plus `MSYS_NO_PATHCONV=1` in the subprocess environment as defence against shell-level path rewriting.
 
 **Type consistency.** `Commit` fields used in `metrics.py` (`author`, `committer`, `subject`, `body`, `files`, `date`) match the dataclass in Task 2. `targeted_latency_warm` is the field name in Task 8's `measure`, in `budgets`, and in `report.B_COLUMNS`. `net_dependent_count` is produced by `measure` and consumed by `B_COLUMNS`; `net_dependent_tests` (the list) is what gate `_b4` counts. `projected_capsules` is written by `compute_tier_a` and read by `gates.rank` and `report`. `status`/`reason` are set by both sweep commands and read by `report`.
