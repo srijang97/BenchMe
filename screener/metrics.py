@@ -108,6 +108,15 @@ PYTEST_CONFIG_NAMES = ("pyproject.toml", "tox.ini", "setup.cfg", "pytest.ini")
 PINNED_MIN = 0.8
 PIN_MARKERS = ("==", " @ ")
 
+# A PEP 508 requirement: a distribution name, optional extras, then either
+# end-of-line or a specifier / marker / URL / trailing comment. Prose fails it
+# on the second word ("base.txt holds the pins" -> `holds` is not a specifier),
+# which keeps a README under requirements/ from being scored as dependencies.
+DEPENDENCY_LINE = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9._-]*"
+    r"(\[[^\]]*\])?"
+    r"\s*($|[=<>!~;@,(#].*)")
+
 REVERT = re.compile(r'^Revert "')
 HOTFIX = re.compile(r"\b(hotfix|regression|fixup)\b", re.I)
 
@@ -206,34 +215,47 @@ def _is_requirements_file(path):
 
 
 def _requirements_pinned(repo, req_files):
-    """Tri-state pinning verdict over the requirements population.
+    """Tri-state pinning verdict, scored per file and never pooled.
 
-    True  -- at least PINNED_MIN of dependency lines carry a version pin.
-    False -- they do not.
-    None  -- there were no dependency lines to judge, so there is no evidence
-             either way and G7 must not be failed on this alone.
+    True  -- some file has dependency lines and clears PINNED_MIN.
+    False -- some file has dependency lines, but no file clears the bar.
+    None  -- no selected file has a single dependency line, so there is no
+             pinning evidence either way and G7 must not be failed on it.
+
+    Scoring is per file because pooling was itself a false-elimination bug: a
+    prose README under requirements/ poured unpinned lines into one shared
+    ratio and dragged a genuinely pinned requirements.txt below the bar. G7
+    asks whether dependencies are pinned SOMEWHERE, not in every file, so a
+    pinned requirements.txt beside a loose requirements-dev.txt still builds
+    deterministically for the purpose the gate cares about.
 
     Lines beginning with `-` are pip directives (`-r base.txt`, `-e .`,
     `--index-url`), not dependencies. Counting them as unpinned is a category
     error that scores an all-include stub at 0% and eliminates the repo.
     """
-    total = 0
-    pinned = 0
+    saw_dependencies = False
     for t in req_files:
         try:
             body = (repo / t).read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        total = 0
+        pinned = 0
         for line in body.splitlines():
             line = line.strip()
             if not line or line.startswith("#") or line.startswith("-"):
                 continue
+            if not DEPENDENCY_LINE.match(line):
+                continue
             total += 1
             if any(marker in line for marker in PIN_MARKERS):
                 pinned += 1
-    if not total:
-        return None
-    return (pinned / total) >= PINNED_MIN
+        if not total:
+            continue
+        saw_dependencies = True
+        if (pinned / total) >= PINNED_MIN:
+            return True
+    return False if saw_dependencies else None
 
 
 def detect_environment(repo, tracked):
