@@ -126,8 +126,19 @@ def cmd_tier_b(args):
 
 
 def cmd_report(args):
-    print("report not implemented yet", file=sys.stderr)
-    return 1
+    import subprocess
+
+    import report
+
+    sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                         cwd=str(ROOT.parent), capture_output=True,
+                         text=True).stdout.strip() or "unknown"
+    text = report.render(read_records(TIER_A), read_records(TIER_B),
+                         args.cutoff, sha)
+    path = OUT / "REPORT.md"
+    path.write_text(text, encoding="utf-8")
+    print(f"wrote {path}")
+    return 0
 
 
 def main(argv=None):
