@@ -202,20 +202,30 @@ is `hatchling` — and would separately have been eliminated by G6 on
 `.github/workflows/third-party.yml`, an integration workflow that is not the
 default test path.
 
-> **Correction, 2026-08-10, after Tier B ran.** The original wording of this
-> paragraph also claimed that "installing pydantic compiles no Rust". That is true
-> of `pip install pydantic` from PyPI and **false** of building this repository
-> from its own lockfile: `uv.lock` declares `pydantic-core` an in-tree editable
-> workspace member, so honouring the lock requires a Rust toolchain. pydantic
-> subsequently failed Tier B gate B2 for exactly that reason.
+> **Correction history, 2026-08-10.** This paragraph originally also claimed that
+> "installing pydantic compiles no Rust". It was then corrected to say the opposite
+> — that honouring the repo's own `uv.lock` requires a Rust toolchain, because
+> `pydantic-core` is declared an in-tree editable workspace member — after pydantic
+> failed Tier B gate B2.
 >
-> The withdrawal decision stands, and the episode argues for it rather than
-> against it. G5 would have eliminated pydantic on a filename, by a rule that was
-> wrong about `examples/` and vendored trees generally and right here only by
-> luck. Tier B eliminated it on a build that actually failed, with a specific,
-> checkable reason. **Measuring produced a true finding where predicting produced
-> a coincidence** — but the prediction was not baseless, and this spec should not
-> have asserted the stronger claim without building first. That is the highest-yield candidate in
+> **That correction was itself wrong and is retracted.** The real cause was bind-mount
+> shadowing: `_pydantic_core.so` was present in the built image, but mounting the
+> repository over `/repo` hid the installed package, so imports failed and zero tests
+> were collected. With the mount handled correctly pydantic collects 6,884 tests. No
+> Rust toolchain was ever required.
+>
+> Two things are worth keeping from the episode. First, the G5/G6 withdrawal stands
+> and is strengthened: G5 would have eliminated pydantic on a filename, by a rule
+> demonstrably wrong about `examples/` and vendored trees, and the elimination
+> Tier B initially produced was an artefact of our own container rather than a
+> property of the repository. Neither the prediction nor the first measurement was
+> trustworthy; only the *diagnosed* measurement was.
+>
+> Second, and more usefully: three separate Tier B eliminations — starlette on root
+> permissions, the CRLF injection, and this one — turned out to be defects in the
+> measurement apparatus rather than the repositories. **When a candidate fails, the
+> apparatus is the leading hypothesis, not the fallback.** That belongs in the
+> operating procedure for any future run of this tool. That is the highest-yield candidate in
 the field (35.13 projected capsules against the next survivor's 8.98), removed
 twice over by files irrelevant to whether it can be containerised.
 
