@@ -1,0 +1,91 @@
+# Candidate repos for the BenchMe corpus screener.
+# tag is one of: logic, io, framework, coupling, cli, app
+# Every entry is a prior to be falsified, not a pre-screened fact.
+candidates:
+  - name: pydantic
+    url: https://github.com/pydantic/pydantic.git
+    tag: logic
+    note: Default pick. Rust core arrives as a pinned wheel so G5 should hold.
+    # Spec gate B2 reads "all tests pass at HEAD, modulo a recorded skip list".
+    # This is that provision's first use. Skips are per-repo, version-controlled
+    # and rendered in REPORT.md; a skip that matches nothing is reported loudly
+    # rather than passing quietly, because a stale skip is how a real failure
+    # gets hidden later.
+    skip_tests:
+      - test: tests/test_exports.py::test_public_internal
+        reason: >-
+          Exercises pydantic's own mypy-plugin internals against
+          mypy.expandtype.ExpandTypeVisitor at the mypy version pydantic's own
+          lockfile pins (2.3.0). Tooling hygiene, not library behaviour, and
+          nothing a mined capsule would ever exercise. Fails deterministically
+          in all five sealed runs; pydantic's CI never sees it because its test
+          job installs --group testing-extra rather than --all-groups, so mypy
+          is absent and the plugin import path is never taken.
+  - name: attrs
+    url: https://github.com/python-attrs/attrs.git
+    tag: logic
+    note: Clean and hermetic; doubt it clears G2.
+  - name: marshmallow
+    url: https://github.com/marshmallow-code/marshmallow.git
+    tag: logic
+    note: Same shape as attrs, same volume doubt.
+  - name: packaging
+    url: https://github.com/pypa/packaging.git
+    tag: logic
+    note: Very clean, probably too quiet for G2.
+  - name: jsonschema
+    url: https://github.com/python-jsonschema/jsonschema.git
+    tag: logic
+    note: Spec-driven tests; test_map_ratio uncertain.
+  - name: httpx
+    url: https://github.com/encode/httpx.git
+    tag: io
+    note: Mock transports should keep it hermetic; B4 is the question.
+  - name: starlette
+    url: https://github.com/encode/starlette.git
+    tag: io
+    note: TestClient-based, likely hermetic.
+  - name: werkzeug
+    url: https://github.com/pallets/werkzeug.git
+    tag: io
+    note: Socket-level tests; B4 risk.
+  - name: urllib3
+    url: https://github.com/urllib3/urllib3.git
+    tag: io
+    note: Spins a local test server; expect B4 trouble.
+  - name: fastapi
+    url: https://github.com/fastapi/fastapi.git
+    tag: framework
+    note: High velocity, hermetic, large test count.
+  - name: sqlalchemy
+    url: https://github.com/sqlalchemy/sqlalchemy.git
+    tag: coupling
+    note: Best coupling in the list; expect G4 and suite runtime to bite.
+  - name: jinja
+    url: https://github.com/pallets/jinja.git
+    tag: framework
+    note: Moderate volume.
+  - name: flask
+    url: https://github.com/pallets/flask.git
+    tag: framework
+    note: SWE-bench overlap label; small, likely fails G2.
+  - name: click
+    url: https://github.com/pallets/click.git
+    tag: cli
+    note: Very hermetic, clean layout.
+  - name: black
+    url: https://github.com/psf/black.git
+    tag: cli
+    note: Excellent test discipline; velocity may have flattened.
+  - name: rich
+    url: https://github.com/Textualize/rich.git
+    tag: cli
+    note: Snapshot oracles are a different class; worth seeing.
+  - name: pre-commit
+    url: https://github.com/pre-commit/pre-commit.git
+    tag: app
+    note: Application-shaped probe, git-heavy.
+  - name: mkdocs
+    url: https://github.com/mkdocs/mkdocs.git
+    tag: app
+    note: Application-shaped probe, hermetic.
