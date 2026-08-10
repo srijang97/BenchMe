@@ -149,7 +149,7 @@ def _test_target_stem(path):
 
     Support code living in a tests directory -- conftest.py, __init__.py,
     helpers.py -- names no source file and never can, so it must not sit in
-    the ratio's denominator dragging it below G4's threshold. Being inside a
+    the ratio's denominator dragging the reported number down. Being inside a
     tests directory makes a file a test file; only its *name* makes it a test.
     """
     stem = PurePosixPath(path).stem
@@ -176,8 +176,15 @@ def _test_map_counts(tracked):
     names, which collapsed its ratio to 0.03). Ambiguity stays visible as a
     reported column; it is no longer a penalty.
     """
+    # NON_SOURCE_DIRS is applied to BOTH sides of the ratio. Applying it only to
+    # sources was one-directional and could only depress the number: flask's
+    # examples/tutorial/tests/test_auth.py sat in the denominator while its
+    # tracked counterpart examples/tutorial/flaskr/auth.py was barred from being
+    # a source, so it was counted as unmappable rather than left out.
     tests = [t for t in tracked
-             if is_test_file(t) and _test_target_stem(t) is not None]
+             if is_test_file(t)
+             and _test_target_stem(t) is not None
+             and not (NON_SOURCE_DIRS & set(PurePosixPath(t).parts))]
     if not tests:
         return 0, 0, 0
 

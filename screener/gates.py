@@ -2,7 +2,7 @@
 
 CUTOFF_MIN_PAIRS = 360        # G2: 360 * 0.022 = 7.92 ~ 8 capsules
 CUTOFF_MIN_FRESH_COMMITS = 30  # G3
-MIN_TEST_MAP_RATIO = 0.5       # G4
+MIN_TEST_MAP_RATIO = 0.5       # G4 -- RETIRED, used only by the unused _g4
 MAX_OPERATOR_MINUTES = 120     # B1
 MAX_FLAKE_RATE = 0.005         # B3
 MAX_NET_DEPENDENT_SHARE = 0.02  # B4
@@ -29,6 +29,11 @@ def _g3(r):
 
 
 def _g4(r):
+    """RETIRED -- withdrawn from TIER_A_GATES, see the note above TIER_A_GATES.
+
+    Kept unused and deliberately: `test_map_ratio` and `test_map_ambiguous` are
+    still computed and still reported, they simply stop being fatal.
+    """
     v = r.get("test_map_ratio", 0.0)
     if v < MIN_TEST_MAP_RATIO:
         return f"test_map_ratio {v} < {MIN_TEST_MAP_RATIO}"
@@ -57,11 +62,22 @@ def _g7(r):
     return None
 
 
+# G4 (test_map_ratio >= 0.5) is RETIRED, not reused. The id stays burned so a
+# future gate cannot silently inherit it and make the ledger's history lie.
+#
+# It was withdrawn because it measured filename convention, not selectability.
+# Capsules are mined from commits that touch source AND tests, so a capsule's
+# fail-to-pass tests come from the commit itself -- name-based mapping is never
+# required for mutation hardening. Tier B's `targeted_latency` measures the real
+# constraint empirically, on finalists. The live sweep was the evidence: three of
+# three mature repositories failed G4 while being perfectly selectable, because
+# they name test files after behaviours rather than modules.
+#
+# `_g4` is kept above, unused, so the retired rule stays readable.
 TIER_A_GATES = [
     ("G1", "Python + pytest detected", _g1),
     ("G2", "candidate_pairs >= 360", _g2),
     ("G3", "commits_since_cutoff >= 30", _g3),
-    ("G4", "test_map_ratio >= 0.5", _g4),
     ("G5", "no compiled extension built from source", _g5),
     ("G6", "no service dependency on default test path", _g6),
     ("G7", "lockfile or pinned dependencies present", _g7),
