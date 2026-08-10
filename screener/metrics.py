@@ -87,3 +87,146 @@ def is_candidate_pair(commit, max_files=10):
     has_source = any(is_source_file(f) for f in commit.files)
     has_test = any(is_test_file(f) for f in commit.files)
     return has_source and has_test
+
+
+COMPILED_NAMES = ("Cargo.toml", "CMakeLists.txt", "setup.py")
+COMPILED_SUFFIXES = (".pyx", ".pxd")
+SERVICE_WORDS = re.compile(
+    r"postgres|mysql|mariadb|redis|rabbitmq|kafka|mongodb|docker-compose", re.I)
+CI_DIRS = (".github/workflows", ".gitlab-ci.yml", ".circleci", "azure-pipelines.yml")
+LOCKFILES = ("uv.lock", "poetry.lock", "Pipfile.lock", "pdm.lock")
+REVERT = re.compile(r'^Revert "')
+HOTFIX = re.compile(r"\b(hotfix|regression|fixup)\b", re.I)
+
+
+def test_map_ratio(tracked):
+    """Fraction of test files resolvable to a source file by naming convention.
+
+    Conventions: tests/test_X.py -> **/X.py, and tests/X_test.py -> **/X.py.
+    """
+    tests = [t for t in tracked if is_test_file(t)]
+    if not tests:
+        return 0.0
+    stems = {PurePosixPath(s).stem for s in tracked if is_source_file(s)}
+    matched = 0
+    for t in tests:
+        stem = PurePosixPath(t).stem
+        if stem.startswith("test_") and stem[len("test_"):] in stems:
+            matched += 1
+        elif stem.endswith("_test") and stem[: -len("_test")] in stems:
+            matched += 1
+    return matched / len(tests)
+
+
+def detect_environment(repo, tracked):
+    names = {PurePosixPath(t).name for t in tracked}
+    lockfile = next((lf for lf in LOCKFILES if lf in names), None)
+    if lockfile is None and any(
+        PurePosixPath(t).name.startswith("requirements") for t in tracked
+    ):
+        lockfile = "requirements"
+
+    compiled = [
+        t for t in tracked
+        if PurePosixPath(t).suffix in COMPILED_SUFFIXES
+        or PurePosixPath(t).name in ("Cargo.toml", "CMakeLists.txt")
+    ]
+    # setup.py only counts when it actually declares extensions.
+    if "setup.py" in names:
+        for t in tracked:
+            if PurePosixPath(t).name == "setup.py":
+                try:
+                    body = (repo / t).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                if "ext_modules" in body:
+                    compiled.append(t)
+
+    service = []
+    for t in tracked:
+        name = PurePosixPath(t).name
+        parent = str(PurePosixPath(t).parent)
+        if parent.startswith(".github/workflows") or name in (
+            "tox.ini", "pyproject.toml", "docker-compose.yml", "docker-compose.yaml"
+        ):
+            try:
+                body = (repo / t).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if SERVICE_WORDS.search(body):
+                service.append(t)
+
+    uses_pytest = False
+    for t in tracked:
+        if PurePosixPath(t).name in ("pyproject.toml", "tox.ini", "setup.cfg",
+                                     "pytest.ini"):
+            try:
+                body = (repo / t).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if "pytest" in body:
+                uses_pytest = True
+                break
+
+    return {
+        "lockfile": lockfile,
+        "has_pyproject": "pyproject.toml" in names,
+        "has_ci": any(any(t.startswith(d) or t == d for d in CI_DIRS)
+                      for t in tracked),
+        "has_container": ("Dockerfile" in names
+                          or "devcontainer.json" in names),
+        "compiled_markers": sorted(set(compiled)),
+        "service_markers": sorted(set(service)),
+        "uses_pytest": uses_pytest,
+    }
+
+
+def _percentile(values, pct):
+    if not values:
+        return 0
+    ordered = sorted(values)
+    idx = min(int(round((pct / 100) * (len(ordered) - 1))), len(ordered) - 1)
+    return ordered[idx]
+
+
+def compute_tier_a(commits, tracked, repo, cutoff):
+    """Full Tier A metric record. `cutoff` is an ISO date string, e.g. 2026-05-01."""
+    pairs = [c for c in commits if is_candidate_pair(c)]
+    excluded = [c for c in commits if not is_human(c)]
+    fresh_pairs = [c for c in pairs if c.date[:10] >= cutoff]
+    since_cutoff = [c for c in commits if c.date[:10] >= cutoff]
+
+    file_counts = [len(c.files) for c in pairs]
+    source_counts = [sum(1 for f in c.files if is_source_file(f)) for c in pairs]
+
+    py_files = [t for t in tracked if PurePosixPath(t).suffix == ".py"]
+    loc = 0
+    for t in py_files:
+        try:
+            loc += sum(1 for _ in open(repo / t, encoding="utf-8", errors="replace"))
+        except OSError:
+            pass
+
+    record = {
+        "commits_total": len(commits),
+        "commits_since_cutoff": len(since_cutoff),
+        "candidate_pairs": len(pairs),
+        "candidate_pairs_fresh": len(fresh_pairs),
+        "excluded_nonhuman": len(excluded),
+        "projected_capsules": round(len(pairs) * CONVERSION_RATE, 2),
+        "projected_fresh": round(len(fresh_pairs) * CONVERSION_RATE, 2),
+        "fresh_share": round(len(fresh_pairs) / len(pairs), 4) if pairs else 0.0,
+        "files_p50": _percentile(file_counts, 50),
+        "files_p90": _percentile(file_counts, 90),
+        "frac_multifile": (
+            round(sum(1 for n in source_counts if n >= 3) / len(pairs), 4)
+            if pairs else 0.0
+        ),
+        "revert_pairs": sum(1 for c in commits if REVERT.match(c.subject)),
+        "hotfix_commits": sum(1 for c in commits if HOTFIX.search(c.subject)),
+        "test_map_ratio": round(test_map_ratio(tracked), 4),
+        "tracked_files": len(tracked),
+        "python_loc": loc,
+    }
+    record.update(detect_environment(repo, tracked))
+    return record

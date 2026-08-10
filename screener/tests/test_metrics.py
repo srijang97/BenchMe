@@ -60,3 +60,17 @@ def test_candidate_pair_definition(tmp_path):
 
     assert len(pairs) == 1
     assert pairs[0].subject == "valid pair"
+
+
+def test_test_map_ratio(tmp_path):
+    """Spec section 7 fixture 3: three of four test files resolve to a source."""
+    tracked = [
+        "src/pkg/alpha.py",
+        "src/pkg/beta.py",
+        "src/pkg/gamma.py",
+        "tests/test_alpha.py",     # resolves to alpha.py
+        "tests/test_beta.py",      # resolves to beta.py
+        "tests/gamma_test.py",     # resolves to gamma.py
+        "tests/test_nothing.py",   # resolves to nothing
+    ]
+    assert metrics.test_map_ratio(tracked) == 0.75
