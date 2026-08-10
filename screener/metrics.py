@@ -164,9 +164,17 @@ def _test_map_counts(tracked):
     """(matched, ambiguous, total) for the test-to-source naming map.
 
     Conventions: test_X.py -> **/X.py, and X_test.py -> **/X.py. A test counts
-    as mapped only when its stem resolves to exactly ONE source file: if two
-    packages both define X.py, targeted test selection is precisely what is
-    NOT possible, so the ambiguity is recorded rather than credited.
+    as mapped when its stem resolves to ONE OR MORE source files.
+
+    Uniqueness is deliberately NOT required. The metric exists to predict
+    whether targeted test selection is possible, and selection addresses the
+    TEST file (`pytest tests/test_main.py::test_x`) -- it never has to decide
+    which source file the test corresponds to. How many source files happen to
+    share a stem therefore has no bearing on what the metric predicts, and
+    requiring uniqueness only penalised repos carrying a vendored or
+    compatibility subtree (pydantic's `pydantic/v1/` duplicates ~25 module
+    names, which collapsed its ratio to 0.03). Ambiguity stays visible as a
+    reported column; it is no longer a penalty.
     """
     tests = [t for t in tracked
              if is_test_file(t) and _test_target_stem(t) is not None]
@@ -182,9 +190,9 @@ def _test_map_counts(tracked):
     ambiguous = 0
     for t in tests:
         hits = by_stem.get(_test_target_stem(t), ())
-        if len(hits) == 1:
+        if len(hits) >= 1:
             matched += 1
-        elif len(hits) > 1:
+        if len(hits) > 1:
             ambiguous += 1
     return matched, ambiguous, len(tests)
 
