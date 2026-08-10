@@ -29,10 +29,22 @@ A_COLUMNS = [
     ("tag", "tag"),
 ]
 
+# Verified against the first real Tier B record (click, 2026-08-10): every key
+# below is present in the record `measure`/`budgets` actually write. A column
+# naming a field that does not exist renders as a blank cell, which in a
+# decision report reads as a measured value of nothing.
+#
+# `install_strategy` is rendered because G7 admits a candidate on the strength
+# of a lockfile: the report has to show whether the build then HONOURED that
+# lock or resolved fresh. `test_count` is rendered because it is the
+# denominator of `flake_rate`, and a silently-zero denominator is exactly how
+# a parser bug once turned a clean suite into a `gated:B3`.
 B_COLUMNS = [
     ("env_rung", "rung"),
+    ("install_strategy", "install"),
     ("operator_minutes", "op_min"),
     ("head_green", "green"),
+    ("test_count", "tests"),
     ("flake_rate", "flake"),
     ("suite_runtime_p50", "suite_s"),
     ("targeted_latency_warm", "warm_s"),
@@ -121,7 +133,9 @@ def render(tier_a, tier_b, cutoff, screener_sha):
 
     out.append("## 5. Recommendation\n")
     passed_b = [r for r in b_records if r.get("status") == "passed"]
-    passed_b.sort(key=lambda r: r.get("hardening_hours", 1e9))
+    # `or 1e9`, not a default: hardening_hours is None for an unmeasured
+    # budget, and None sorts against float with a TypeError.
+    passed_b.sort(key=lambda r: r.get("hardening_hours") or 1e9)
     if passed_b:
         top = passed_b[0]
         out.append(f"**Corpus repo: `{top['name']}`** — cleared Tier A and "

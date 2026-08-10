@@ -31,16 +31,73 @@ def detect_rung(repo, tracked):
     return 0, ""
 
 
+LOCKED = "uv-export-locked"
+RESOLVED = "uv-resolved"
+REPO_DOCKERFILE = "repo-dockerfile"
+
+# The lock is honoured by EXPORTING it and installing into the system
+# interpreter, not by `uv sync`. `uv sync` materialises `/repo/.venv`, and
+# `run_in` bind-mounts the host repo over `/repo` at measurement time, which
+# replaces the whole directory and takes that venv with it. The suite would
+# then run against a bare interpreter. Exporting to the system site-packages
+# puts the environment outside the mount point, where it survives.
+_LOCKED_INSTALL = """RUN uv export --frozen --no-hashes --no-emit-project \\
+        -o /tmp/requirements.txt \\
+ && uv pip install --system -r /tmp/requirements.txt \\
+ && uv pip install --system --no-deps -e .
+"""
+
+# Two real strategies, not a swallow: editable install, else a plain install.
+# There is deliberately no trailing `|| true` -- see _dockerfile_for_rung4.
+_RESOLVED_INSTALL = """RUN uv pip install --system -e . \\
+ || uv pip install --system .
+"""
+
+
+def _install_strategy(repo):
+    """Which install path the generated image will use, for the record.
+
+    G7 admits a candidate on the strength of a lockfile, justified by
+    determinism. If the build then resolved fresh from PyPI the gate and the
+    build would disagree, so the two must be reported together.
+    """
+    return LOCKED if (Path(repo) / "uv.lock").is_file() else RESOLVED
+
+
 def _dockerfile_for_rung4(repo):
-    """Generic uv-based image. Deterministic because the repo pins its deps."""
+    """Generic uv image that honours the repo's lockfile when it ships one.
+
+    Two invariants:
+
+    1. A `uv.lock` is USED, not merely counted by G7. Otherwise the gate
+       admits a repo for determinism the build then throws away.
+    2. Nothing is swallowed. A build that cannot install the package or
+       pytest must FAIL, so the caller records `gated:B1` -- an honest
+       "cannot containerise". A green build into an empty environment would
+       resurface later as "suite not green" and be misread as a property of
+       the repository rather than of the screener.
+
+    The closing `python -m pytest --version` is the assertion that makes
+    "the build went green" mean "the environment is usable".
+    """
+    install = (_LOCKED_INSTALL if _install_strategy(repo) == LOCKED
+               else _RESOLVED_INSTALL)
+    # `less` is not decoration. python:3.12-slim omits it, but it is present
+    # in every ordinary Linux dev image -- including the
+    # mcr.microsoft.com/devcontainers/python:3 that click's own devcontainer
+    # names. Without it, suites that shell out to a pager fail for a reason
+    # that belongs to this template, not to the repository, and B2 would read
+    # that as "suite not green at HEAD".
     return f"""FROM {BASE_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends git curl \\
-    build-essential && rm -rf /var/lib/apt/lists/*
+    less build-essential && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir uv
 WORKDIR /repo
 COPY . /repo
-RUN uv pip install --system -e . || uv pip install --system . || true
-RUN uv pip install --system pytest || true
+{install}# Only touched when the lock did not already supply pytest, so a locked
+# environment stays exactly as locked.
+RUN python -c "import pytest" || uv pip install --system pytest
+RUN python -m pytest --version
 """
 
 
@@ -58,7 +115,16 @@ def docker_env():
     return dict(os.environ, MSYS_NO_PATHCONV="1", MSYS2_ARG_CONV_EXCL="*")
 
 
-def build_image(repo, name, rung, log_dir):
+def build_image(repo, name, rung, log_dir, record=None):
+    """Build the measurement image. Returns the tag, or None on any failure.
+
+    A failed build is a RESULT (`gated:B1`), never an exception: nothing here
+    raises, including a timeout or a missing docker binary. The full build log
+    is written either way.
+
+    `record`, when given, receives `install_strategy` so the caller can report
+    whether this repo's environment was locked or resolved.
+    """
     repo = Path(repo)
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -66,23 +132,53 @@ def build_image(repo, name, rung, log_dir):
 
     if rung == 2:
         dockerfile = next(
-            p for p in repo.rglob("Dockerfile") if p.is_file())
+            (p for p in repo.rglob("Dockerfile") if p.is_file()), None)
+        if dockerfile is None:
+            _write_build_log(log_dir, "", "no Dockerfile found on disk")
+            return None
+        strategy = REPO_DOCKERFILE
         cmd = ["docker", "build", "-f", host_path(dockerfile), "-t", tag,
                host_path(repo)]
     else:
         # Rungs 1, 3 and 4 all end up here: write a generic uv image and let
         # the repo's own pins do the work. Record the rung that was DETECTED,
         # not the mechanism used to build.
-        generated = repo / "Dockerfile.screener"
+        #
+        # The generated Dockerfile lives in log_dir, NOT in the repo. Writing
+        # it into the clone would leave an untracked file inside the artefact
+        # under measurement; `docker build -f` accepts a Dockerfile outside
+        # the build context, so there is no reason to pollute it.
+        generated = log_dir / "Dockerfile.screener"
         generated.write_text(_dockerfile_for_rung4(repo), encoding="utf-8")
+        strategy = _install_strategy(repo)
         cmd = ["docker", "build", "-f", host_path(generated), "-t", tag,
                host_path(repo)]
 
-    proc = subprocess.run(cmd, capture_output=True, text=True, env=docker_env(),
-                          encoding="utf-8", errors="replace", timeout=3600)
-    with open(log_dir / "docker-build.log", "w", encoding="utf-8") as fh:
-        fh.write(proc.stdout + "\n" + proc.stderr)
+    if record is not None:
+        record["install_strategy"] = strategy
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              env=docker_env(), encoding="utf-8",
+                              errors="replace", timeout=3600)
+    except subprocess.TimeoutExpired as exc:
+        _write_build_log(log_dir, exc.stdout, "TIMEOUT after 3600s")
+        return None
+    except OSError as exc:
+        _write_build_log(log_dir, "", f"BUILD NOT STARTED: {exc}")
+        return None
+    _write_build_log(log_dir, proc.stdout, proc.stderr)
     return tag if proc.returncode == 0 else None
+
+
+def _write_build_log(log_dir, stdout, stderr):
+    def _text(v):
+        if v is None:
+            return ""
+        return v.decode("utf-8", "replace") if isinstance(v, bytes) else v
+
+    with open(Path(log_dir) / "docker-build.log", "w", encoding="utf-8") as fh:
+        fh.write(_text(stdout) + "\n" + _text(stderr))
 
 
 def run_in(image, repo, argv, network, log_path, timeout=3600):
@@ -97,3 +193,135 @@ def run_in(image, repo, argv, network, log_path, timeout=3600):
     with open(log_path, "w", encoding="utf-8") as fh:
         fh.write(f"$ {' '.join(cmd)}\n{proc.stdout}\n{proc.stderr}")
     return proc
+
+
+# The brief specified `\S+::\S+`, which cannot match a parametrized nodeid
+# containing a space -- `test_echo_via_pager[test0- less]` and its 372 kin.
+# Against click that regex saw 1604 of 1977 outcomes and only 8 of 24
+# failures, silently shrinking both the flake denominator and the failure
+# set. `\S+::.*?` anchored on the outcome word recovers exactly the 1977
+# pytest itself reports.
+OUTCOME = re.compile(
+    r"^(?P<nodeid>\S+::.*?)\s+(?P<outcome>PASSED|FAILED|ERROR|SKIPPED)\b",
+    re.M)
+
+# `-v` and `-q` are ADDITIVE in pytest: together they cancel to verbosity 0,
+# which prints progress dots instead of per-test outcome lines. The brief
+# passed both, so parse_outcomes returned {} -- test_count 0, head_green
+# vacuously True, flake_rate 1.0 and a `gated:B3` false elimination on a
+# suite that had in fact run. `-q` is dropped deliberately; do not restore it.
+PYTEST_ARGV = ["python", "-m", "pytest", "-v", "-p", "no:randomly", "--tb=no"]
+
+
+def parse_outcomes(stdout):
+    return {m.group("nodeid"): m.group("outcome")
+            for m in OUTCOME.finditer(stdout)}
+
+
+def _collection_error(output, limit=400):
+    """The line that explains a zero-test run, for the gate ledger.
+
+    Without it the ledger says "suite not green at HEAD" and gives the reader
+    nothing to act on, when the real cause is usually a single ImportError.
+    """
+    interesting = [ln.strip() for ln in output.splitlines()
+                   if ln.startswith(("E   ", "ImportError", "ERROR"))]
+    return " | ".join(interesting)[:limit] if interesting else output[-limit:].strip()
+
+
+def measure(image, repo, log_dir, runs=5):
+    """Five sealed suite runs, one networked run, and targeted-test latency."""
+    import time
+
+    log_dir = Path(log_dir)
+    per_run = []
+    durations = []
+    first_output = ""
+    for i in range(runs):
+        started = time.monotonic()
+        proc = run_in(image, repo, PYTEST_ARGV,
+                      network=False, log_path=log_dir / f"suite-{i}.log")
+        durations.append(time.monotonic() - started)
+        per_run.append(parse_outcomes(proc.stdout))
+        if i == 0:
+            first_output = f"{proc.stdout}\n{proc.stderr}"
+
+    all_ids = set().union(*per_run) if per_run else set()
+    flaky = [nid for nid in all_ids
+             if len({run.get(nid) for run in per_run}) > 1]
+    baseline = per_run[0] if per_run else {}
+    sealed_failures = {nid for nid, o in baseline.items()
+                       if o in ("FAILED", "ERROR")}
+
+    net_proc = run_in(image, repo, PYTEST_ARGV,
+                      network=True, log_path=log_dir / "suite-networked.log")
+    net_outcomes = parse_outcomes(net_proc.stdout)
+    net_failures = {nid for nid, o in net_outcomes.items()
+                    if o in ("FAILED", "ERROR")}
+    # Failing sealed but passing networked: these are network-dependent, not
+    # agent mistakes. The runner denies egress by design, so without this diff
+    # they would be misattributed later.
+    net_dependent = sorted(sealed_failures - net_failures)
+
+    target = next((nid for nid, o in baseline.items() if o == "PASSED"), None)
+    cold = warm = None
+    if target:
+        started = time.monotonic()
+        run_in(image, repo, ["python", "-m", "pytest", target, "-q"],
+               network=False, log_path=log_dir / "targeted-cold.log")
+        cold = round(time.monotonic() - started, 2)
+        started = time.monotonic()
+        run_in(image, repo, ["python", "-m", "pytest", target, "-q"],
+               network=False, log_path=log_dir / "targeted-warm.log")
+        warm = round(time.monotonic() - started, 2)
+
+    total = len(all_ids)
+    prefixes = {nid.split("::")[0] for nid in net_dependent}
+
+    # A suite that collected NOTHING is not green -- `len(sealed_failures)==0`
+    # is vacuously true there, and reporting it as green pushes the record on
+    # to B3, which then eliminates on `flake_rate 1.0`. That reason is false:
+    # nothing ran, so nothing was measured as flaky. Zero collected tests is a
+    # B2 result ("suite not green at HEAD") and the ledger has to say so,
+    # because a wrong elimination reason is worse than a wrong verdict -- it
+    # sends the next reader to debug the wrong thing.
+    collected = total > 0
+    return {
+        "test_count": total,
+        "collected": collected,
+        "collection_error": "" if collected else _collection_error(first_output),
+        "head_green": collected and len(sealed_failures) == 0,
+        "head_failures": sorted(sealed_failures)[:20],
+        "flake_rate": round(len(flaky) / total, 5) if total else 1.0,
+        "flaky_tests": flaky[:20],
+        "suite_runtime_p50": round(sorted(durations)[len(durations) // 2], 2),
+        "targeted_latency_cold": cold,
+        "targeted_latency_warm": warm,
+        "net_dependent_tests": net_dependent[:50],
+        "net_dependent_count": len(net_dependent),
+        "net_marker_excludable": len(prefixes) <= 3 and len(net_dependent) > 0,
+        "target_nodeid": target,
+    }
+
+
+def budgets(record, mutants=60, tasks=30, k=5, configs=4):
+    """Derived wall-clock estimates. Inputs are seconds; report hours.
+
+    Hardening uses the WARM targeted latency on purpose: it runs thousands of
+    invocations inside one already-started container, so cold-start overhead
+    would inflate the estimate.
+
+    A budget is None, never 0.0, when its input was never measured. A repo
+    whose suite collected nothing would otherwise report `hardening_hours
+    0.0` beside a healthy candidate's 0.45 and read as the CHEAPER option, in
+    the one table the corpus decision is made from.
+    """
+    warm = record.get("targeted_latency_warm")
+    suite = record.get("suite_runtime_p50")
+    collected = record.get("collected", True)
+    return {
+        "hardening_hours": (round(mutants * tasks * warm / 3600, 2)
+                            if collected and warm else None),
+        "verification_hours": (round(suite * tasks * k * configs / 3600, 2)
+                               if collected and suite else None),
+    }

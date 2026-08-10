@@ -121,8 +121,59 @@ def cmd_tier_a(args):
 
 
 def cmd_tier_b(args):
-    print("tier-b not implemented yet", file=sys.stderr)
-    return 1
+    import gates
+    import gitmeta
+    import tierb
+
+    tier_a = read_records(TIER_A)
+    finalists = gates.rank(list(tier_a.values()))[: args.top]
+    if not finalists:
+        print("no Tier A survivors", file=sys.stderr)
+        return 1
+    if args.only:
+        finalists = [r for r in finalists if r["name"] in args.only]
+        if not finalists:
+            print(f"none of {args.only} is among the top {args.top} finalists",
+                  file=sys.stderr)
+            return 1
+    done = read_records(TIER_B)
+    for cand in finalists:
+        name = cand["name"]
+        if not args.force and name in done and is_done(done[name]):
+            print(f"skip {name} ({done[name]['status']})")
+            continue
+        repo = WORK / name
+        log_dir = LOGS / name
+        record = {"name": name, "tag": cand.get("tag"),
+                  "head_sha": gitmeta.head_sha(repo)}
+        tracked = gitmeta.tracked_files(repo)
+        rung, source = tierb.detect_rung(repo, tracked)
+        record["env_rung"] = rung
+        record["env_source"] = source
+        print(f"tier-b {name}: rung {rung} ({source})", flush=True)
+        if rung == 0:
+            record.update(status="gated:B1",
+                          reason="no usable environment definition",
+                          operator_minutes=0)
+            append_record(TIER_B, record)
+            continue
+
+        image = tierb.build_image(repo, name, rung, log_dir, record=record)
+        if image is None:
+            record.update(status="gated:B1",
+                          reason="docker build failed; see docker-build.log",
+                          operator_minutes=0)
+            append_record(TIER_B, record)
+            continue
+
+        record["operator_minutes"] = operator_minutes_for(name, args)
+        record.update(tierb.measure(image, repo, log_dir))
+        record.update(tierb.budgets(record))
+        status, reason = gates.evaluate_tier_b(record)
+        record.update(status=status, reason=reason)
+        append_record(TIER_B, record)
+        print(f"  {status} {reason or ''}")
+    return 0
 
 
 def cmd_report(args):
@@ -154,6 +205,11 @@ def main(argv=None):
     b = sub.add_parser("tier-b", help="container build and suite measurement, finalists only")
     b.add_argument("--top", type=int, default=4)
     b.add_argument("--force", action="store_true")
+    b.add_argument("--only", action="append", default=[], metavar="NAME",
+                   help="restrict to these finalists, e.g. --only click. "
+                        "Filters WITHIN the top N -- it never promotes a repo "
+                        "the ranking did not already select, so it cannot be "
+                        "used to slip a lower-ranked candidate into Tier B.")
     b.add_argument("--operator-minutes", action="append", default=[],
                    metavar="NAME=MINUTES",
                    help="minutes you spent per repo, e.g. --operator-minutes click=35. "
