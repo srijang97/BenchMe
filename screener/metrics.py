@@ -4,6 +4,7 @@ This module is the durable artifact. When the rest of the screener is thrown
 away, these rules are harvested into the miner's stage 0. Change them
 deliberately, and update screener/tests/test_metrics.py when you do.
 """
+import fnmatch
 import re
 from pathlib import PurePosixPath
 
@@ -89,42 +90,132 @@ def is_candidate_pair(commit, max_files=10):
     return has_source and has_test
 
 
-COMPILED_NAMES = ("Cargo.toml", "CMakeLists.txt", "setup.py")
 COMPILED_SUFFIXES = (".pyx", ".pxd")
 SERVICE_WORDS = re.compile(
     r"postgres|mysql|mariadb|redis|rabbitmq|kafka|mongodb|docker-compose", re.I)
 CI_DIRS = (".github/workflows", ".gitlab-ci.yml", ".circleci", "azure-pipelines.yml")
 LOCKFILES = ("uv.lock", "poetry.lock", "Pipfile.lock", "pdm.lock")
+
+# Compose V2 renamed the default file to compose.yaml; both spellings, and the
+# older docker-compose.* forms, declare backing services.
+COMPOSE_GLOBS = ("docker-compose*.yml", "docker-compose*.yaml", "compose.y*ml")
+SERVICE_CONFIG_NAMES = ("tox.ini", "pyproject.toml")
+PYTEST_CONFIG_NAMES = ("pyproject.toml", "tox.ini", "setup.cfg", "pytest.ini")
+
+# G7 asks for "lockfile OR fully pinned dependencies". A requirements file only
+# substitutes for a real lockfile when it is actually pinned, so measure the
+# pinning rather than trusting the filename.
+PINNED_MIN = 0.8
+PIN_MARKERS = ("==", " @ ")
+
+# conftest.py is test *support*: it is a test file by location but can never
+# name a source file, so counting it only depresses the mapping ratio.
+TEST_MAP_EXCLUDE = {"conftest.py"}
+
 REVERT = re.compile(r'^Revert "')
 HOTFIX = re.compile(r"\b(hotfix|regression|fixup)\b", re.I)
 
 
-def test_map_ratio(tracked):
-    """Fraction of test files resolvable to a source file by naming convention.
+def _under_ci(path):
+    """True for CI-owned paths. Prefix semantics preserved from `has_ci`."""
+    return any(path.startswith(d) or path == d for d in CI_DIRS)
 
-    Conventions: tests/test_X.py -> **/X.py, and tests/X_test.py -> **/X.py.
+
+def _is_compose(name):
+    return any(fnmatch.fnmatch(name, g) for g in COMPOSE_GLOBS)
+
+
+def _is_pytest_layout(path):
+    """Structural evidence of pytest: `**/tests/**/test_*.py` or top-level `test_*.py`.
+
+    A repo can run pytest without naming it in any config file, so the layout
+    is treated as sufficient on its own. G1 eliminates a repo on a False here,
+    which makes a missed detection far more expensive than a generous one.
     """
-    tests = [t for t in tracked if is_test_file(t)]
+    p = PurePosixPath(path)
+    if p.suffix != ".py" or not p.name.startswith("test_"):
+        return False
+    parts = p.parts
+    return len(parts) == 1 or "tests" in parts[:-1]
+
+
+def _test_map_counts(tracked):
+    """(matched, ambiguous, total) for the test-to-source naming map.
+
+    Conventions: test_X.py -> **/X.py, and X_test.py -> **/X.py. A test counts
+    as mapped only when its stem resolves to exactly ONE source file: if two
+    packages both define X.py, targeted test selection is precisely what is
+    NOT possible, so the ambiguity is recorded rather than credited.
+    """
+    tests = [t for t in tracked
+             if is_test_file(t) and PurePosixPath(t).name not in TEST_MAP_EXCLUDE]
     if not tests:
-        return 0.0
-    stems = {PurePosixPath(s).stem for s in tracked if is_source_file(s)}
+        return 0, 0, 0
+
+    by_stem = {}
+    for s in tracked:
+        if is_source_file(s):
+            by_stem.setdefault(PurePosixPath(s).stem, []).append(s)
+
     matched = 0
+    ambiguous = 0
     for t in tests:
         stem = PurePosixPath(t).stem
-        if stem.startswith("test_") and stem[len("test_"):] in stems:
+        if stem.startswith("test_"):
+            target = stem[len("test_"):]
+        elif stem.endswith("_test"):
+            target = stem[: -len("_test")]
+        else:
+            continue
+        hits = by_stem.get(target, ())
+        if len(hits) == 1:
             matched += 1
-        elif stem.endswith("_test") and stem[: -len("_test")] in stems:
-            matched += 1
-    return matched / len(tests)
+        elif len(hits) > 1:
+            ambiguous += 1
+    return matched, ambiguous, len(tests)
+
+
+def test_map_ratio(tracked):
+    """Fraction of test files resolvable to exactly one source file."""
+    matched, _ambiguous, total = _test_map_counts(tracked)
+    if not total:
+        return 0.0
+    return matched / total
+
+
+def _requirements_pinned(repo, req_files):
+    """True when at least PINNED_MIN of declared requirement lines carry a pin."""
+    total = 0
+    pinned = 0
+    for t in req_files:
+        try:
+            body = (repo / t).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in body.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            total += 1
+            if any(marker in line for marker in PIN_MARKERS):
+                pinned += 1
+    if not total:
+        return False
+    return (pinned / total) >= PINNED_MIN
 
 
 def detect_environment(repo, tracked):
     names = {PurePosixPath(t).name for t in tracked}
     lockfile = next((lf for lf in LOCKFILES if lf in names), None)
-    if lockfile is None and any(
-        PurePosixPath(t).name.startswith("requirements") for t in tracked
-    ):
-        lockfile = "requirements"
+    requirements_unpinned = False
+    if lockfile is None:
+        req_files = [t for t in tracked
+                     if PurePosixPath(t).name.startswith("requirements")]
+        if req_files:
+            if _requirements_pinned(repo, req_files):
+                lockfile = "requirements"
+            else:
+                requirements_unpinned = True
 
     compiled = [
         t for t in tracked
@@ -142,13 +233,12 @@ def detect_environment(repo, tracked):
                 if "ext_modules" in body:
                     compiled.append(t)
 
+    # Every CI provider is read, not just GitHub Actions: a service declared in
+    # .gitlab-ci.yml counts exactly as much as one declared in a workflow file.
     service = []
     for t in tracked:
         name = PurePosixPath(t).name
-        parent = str(PurePosixPath(t).parent)
-        if parent.startswith(".github/workflows") or name in (
-            "tox.ini", "pyproject.toml", "docker-compose.yml", "docker-compose.yaml"
-        ):
+        if _under_ci(t) or _is_compose(name) or name in SERVICE_CONFIG_NAMES:
             try:
                 body = (repo / t).read_text(encoding="utf-8", errors="replace")
             except OSError:
@@ -158,8 +248,7 @@ def detect_environment(repo, tracked):
 
     uses_pytest = False
     for t in tracked:
-        if PurePosixPath(t).name in ("pyproject.toml", "tox.ini", "setup.cfg",
-                                     "pytest.ini"):
+        if PurePosixPath(t).name in PYTEST_CONFIG_NAMES:
             try:
                 body = (repo / t).read_text(encoding="utf-8", errors="replace")
             except OSError:
@@ -167,9 +256,12 @@ def detect_environment(repo, tracked):
             if "pytest" in body:
                 uses_pytest = True
                 break
+    if not uses_pytest:
+        uses_pytest = any(_is_pytest_layout(t) for t in tracked)
 
     return {
         "lockfile": lockfile,
+        "requirements_unpinned": requirements_unpinned,
         "has_pyproject": "pyproject.toml" in names,
         "has_ci": any(any(t.startswith(d) or t == d for d in CI_DIRS)
                       for t in tracked),
@@ -199,6 +291,8 @@ def compute_tier_a(commits, tracked, repo, cutoff):
     file_counts = [len(c.files) for c in pairs]
     source_counts = [sum(1 for f in c.files if is_source_file(f)) for c in pairs]
 
+    mapped, ambiguous, total_tests = _test_map_counts(tracked)
+
     py_files = [t for t in tracked if PurePosixPath(t).suffix == ".py"]
     loc = 0
     for t in py_files:
@@ -222,9 +316,10 @@ def compute_tier_a(commits, tracked, repo, cutoff):
             round(sum(1 for n in source_counts if n >= 3) / len(pairs), 4)
             if pairs else 0.0
         ),
-        "revert_pairs": sum(1 for c in commits if REVERT.match(c.subject)),
+        "revert_commits": sum(1 for c in commits if REVERT.match(c.subject)),
         "hotfix_commits": sum(1 for c in commits if HOTFIX.search(c.subject)),
-        "test_map_ratio": round(test_map_ratio(tracked), 4),
+        "test_map_ratio": round(mapped / total_tests, 4) if total_tests else 0.0,
+        "test_map_ambiguous": ambiguous,
         "tracked_files": len(tracked),
         "python_loc": loc,
     }
