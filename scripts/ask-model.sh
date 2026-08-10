@@ -29,7 +29,12 @@ cat > "$PROMPT_FILE"
 case "$MODEL" in
   agy:*)
     AGY_MODEL="${MODEL#agy:}"
-    AGY_BIN="${AGY_BIN:-/c/Users/Srijan/AppData/Local/Programs/Antigravity/bin/antigravity}"
+    # NOTE: ~/tools/bin is in the registry PATH but may be missing from an
+    # inherited (stale) process PATH, so agy is addressed by absolute path.
+    # This is the Antigravity agent CLI, NOT the Antigravity IDE launcher in
+    # AppData\Local\Programs\Antigravity\bin -- that one is Electron and
+    # silently forwards --print to Chromium.
+    AGY_BIN="${AGY_BIN:-/c/Users/Srijan/tools/bin/agy.exe}"
     "$AGY_BIN" --sandbox --print-timeout "${AGY_TIMEOUT:-10m0s}" \
       --model "$AGY_MODEL" --print "$(cat "$PROMPT_FILE")"
     ;;
