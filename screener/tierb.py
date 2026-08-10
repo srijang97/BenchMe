@@ -3,12 +3,17 @@
 Never synthesises an environment. Descends a ladder and records which rung
 worked; the rung is itself the qualification signal.
 """
+import io
 import os
 import re
 import subprocess
+import tarfile
 from pathlib import Path, PurePosixPath
 
 BASE_IMAGE = "python:3.12-slim"
+
+# Non-root by default. See run_in for why root is not a neutral choice.
+DEFAULT_CONTAINER_USER = "1000:1000"
 
 RUNGS = {
     1: "devcontainer.json",
@@ -32,6 +37,8 @@ def detect_rung(repo, tracked):
 
 
 LOCKED = "uv-export-locked"
+LOCKED_ALL = "uv-locked-all-groups"
+LOCKED_DEFAULT = "uv-locked-default-groups"
 RESOLVED = "uv-resolved"
 REPO_DOCKERFILE = "repo-dockerfile"
 
@@ -41,9 +48,14 @@ REPO_DOCKERFILE = "repo-dockerfile"
 # replaces the whole directory and takes that venv with it. The suite would
 # then run against a bare interpreter. Exporting to the system site-packages
 # puts the environment outside the mount point, where it survives.
-_LOCKED_INSTALL = """RUN uv export --frozen --no-hashes --no-emit-project \\
-        -o /tmp/requirements.txt \\
- && uv pip install --system -r /tmp/requirements.txt \\
+_LOCKED_INSTALL = """RUN mkdir -p /opt/screener \
+ && ( uv export --frozen --no-hashes --no-emit-project --all-groups \
+        -o /tmp/requirements.txt \
+      && echo all-groups > /opt/screener/export-mode ) \
+ || ( uv export --frozen --no-hashes --no-emit-project \
+        -o /tmp/requirements.txt \
+      && echo default-groups > /opt/screener/export-mode )
+RUN uv pip install --system -r /tmp/requirements.txt \
  && uv pip install --system --no-deps -e .
 """
 
@@ -168,7 +180,35 @@ def build_image(repo, name, rung, log_dir, record=None):
         _write_build_log(log_dir, "", f"BUILD NOT STARTED: {exc}")
         return None
     _write_build_log(log_dir, proc.stdout, proc.stderr)
-    return tag if proc.returncode == 0 else None
+    if proc.returncode != 0:
+        return None
+    if record is not None and strategy == LOCKED:
+        record["install_strategy"] = _export_mode(tag)
+    return tag
+
+
+def _export_mode(tag):
+    """Which uv export the build actually used, read back out of the image.
+
+    Decided inside the container -- `--all-groups` installs everything the
+    repo declares, which is the faithful reconstruction, but it FAILS on a
+    project declaring conflicting groups (measured on urllib3: `Groups `dev`
+    and `dev-min-pyopenssl` are incompatible`). Falling back to the default
+    groups keeps such a repo measurable instead of booking it `gated:B1`.
+    Read from a marker file rather than the build log, which goes silent on
+    a cached layer.
+    """
+    probe = subprocess.run(
+        ["docker", "run", "--rm", "--network", "none", tag,
+         "cat", "/opt/screener/export-mode"],
+        capture_output=True, text=True, env=docker_env(), encoding="utf-8",
+        errors="replace", timeout=300)
+    mode = probe.stdout.strip()
+    if mode == "all-groups":
+        return LOCKED_ALL
+    if mode == "default-groups":
+        return LOCKED_DEFAULT
+    return LOCKED
 
 
 def _write_build_log(log_dir, stdout, stderr):
@@ -181,9 +221,99 @@ def _write_build_log(log_dir, stdout, stderr):
         fh.write(_text(stdout) + "\n" + _text(stderr))
 
 
-def run_in(image, repo, argv, network, log_path, timeout=3600):
+# Caches, not build products. Restoring these would import one run's state
+# into the next and corrupt the flake measurement.
+_CACHE_MARKERS = ("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache")
+
+
+def sync_generated(image, repo, log_dir, timeout=600):
+    """Restore install-time generated source files into the host clone.
+
+    `run_in` bind-mounts the host repo over `/repo`, which REPLACES whatever
+    the build wrote there. Any project that generates a source file during
+    install therefore has that file deleted out from under it at measurement
+    time. Measured on urllib3: hatch-vcs writes `src/urllib3/_version.py`
+    (gitignored) during `pip install -e .`; `import urllib3` succeeds inside
+    the image and fails the moment the mount is applied, so pytest aborted
+    before collecting a single test and the repo booked `gated:B2`.
+
+    Only files that are gitignored, absent from the host clone, and not
+    caches are copied. Gitignored means `git status` in the clone stays
+    clean, so the artefact under measurement is still not polluted.
+
+    Returns the list of restored paths.
+    """
+    repo = Path(repo)
+    log_dir = Path(log_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    listing = subprocess.run(
+        ["docker", "run", "--rm", "--network", "none", image, "sh", "-c",
+         "git config --global --add safe.directory /repo >/dev/null 2>&1; "
+         "cd /repo && git ls-files --others --ignored --exclude-standard"],
+        capture_output=True, text=True, env=docker_env(), encoding="utf-8",
+        errors="replace", timeout=timeout)
+    wanted = [ln.strip() for ln in listing.stdout.splitlines()
+              if ln.strip()
+              and not any(m in ln for m in _CACHE_MARKERS)
+              and not ln.strip().endswith(".pyc")
+              and not (repo / ln.strip()).exists()]
+    if not wanted:
+        return []
+    # The file list goes over stdin (`tar -T -`), never on the command line.
+    # pydantic generates enough artefacts to blow the Windows command-length
+    # limit outright: `FileNotFoundError: [WinError 206] The filename or
+    # extension is too long`.
+    tar = subprocess.run(
+        ["docker", "run", "--rm", "-i", "--network", "none", image,
+         "tar", "-cf", "-", "-C", "/repo", "-T", "-"],
+        input="\n".join(wanted).encode("utf-8"),
+        capture_output=True, env=docker_env(), timeout=timeout)
+    if tar.returncode != 0:
+        with open(log_dir / "sync-generated.log", "w", encoding="utf-8") as fh:
+            fh.write(tar.stderr.decode("utf-8", "replace"))
+        return []
+    with tarfile.open(fileobj=io.BytesIO(tar.stdout)) as tf:
+        tf.extractall(repo, filter="data")
+    with open(log_dir / "sync-generated.log", "w", encoding="utf-8") as fh:
+        fh.write("restored from image into host clone:\n" + "\n".join(wanted))
+    return wanted
+
+
+def run_in(image, repo, argv, network, log_path, timeout=3600,
+           user=DEFAULT_CONTAINER_USER):
+    """Run argv in the image with the repo bind-mounted at /repo.
+
+    Runs as a NON-ROOT uid by default. Root is not a neutral choice: it
+    bypasses Unix permission bits, so it manufactures false failures on tests
+    that assert a permission is denied -- measured on starlette, where
+    test_staticfiles_with_invalid_dir_permissions_returns_401 got 200 instead
+    of 401 -- and would equally mask genuine permission bugs elsewhere. It is
+    wrong in both directions, and CI does not normally run as root.
+
+    HOME is redirected because a bare uid has no home directory in the image:
+    `docker run --user 1000:1000` leaves HOME=/ , which is not writable, and
+    anything wanting a cache (uv, pip, pytest) fails there. /tmp is writable
+    by any uid. The bind-mounted repo itself IS writable to a non-root uid on
+    Docker Desktop, so __pycache__ and .pytest_cache still land normally --
+    verified before this was adopted.
+    """
     cmd = ["docker", "run", "--rm", "-v", f"{host_path(repo)}:/repo",
            "-w", "/repo"]
+    if user:
+        cmd += ["--user", user,
+                "-e", "HOME=/tmp",
+                "-e", "XDG_CACHE_HOME=/tmp/.cache",
+                # Fallout of running non-root: the bind-mounted repo is not
+                # owned by this uid, so git refuses it with `fatal: detected
+                # dubious ownership in repository at '/repo'` and every test
+                # that shells out to git fails. Measured on pydantic, whose
+                # test_version_info runs `git rev-parse --short HEAD` and
+                # died with exit 128. Declared via GIT_CONFIG_* env vars
+                # rather than a config file because a bare uid has no
+                # writable HOME to hold one.
+                "-e", "GIT_CONFIG_COUNT=1",
+                "-e", "GIT_CONFIG_KEY_0=safe.directory",
+                "-e", "GIT_CONFIG_VALUE_0=*"]
     if not network:
         cmd += ["--network", "none"]
     cmd += [image, *argv]
@@ -229,7 +359,7 @@ def _collection_error(output, limit=400):
     return " | ".join(interesting)[:limit] if interesting else output[-limit:].strip()
 
 
-def measure(image, repo, log_dir, runs=5):
+def measure(image, repo, log_dir, runs=5, user=DEFAULT_CONTAINER_USER):
     """Five sealed suite runs, one networked run, and targeted-test latency."""
     import time
 
@@ -239,8 +369,8 @@ def measure(image, repo, log_dir, runs=5):
     first_output = ""
     for i in range(runs):
         started = time.monotonic()
-        proc = run_in(image, repo, PYTEST_ARGV,
-                      network=False, log_path=log_dir / f"suite-{i}.log")
+        proc = run_in(image, repo, PYTEST_ARGV, network=False,
+                      log_path=log_dir / f"suite-{i}.log", user=user)
         durations.append(time.monotonic() - started)
         per_run.append(parse_outcomes(proc.stdout))
         if i == 0:
@@ -253,8 +383,8 @@ def measure(image, repo, log_dir, runs=5):
     sealed_failures = {nid for nid, o in baseline.items()
                        if o in ("FAILED", "ERROR")}
 
-    net_proc = run_in(image, repo, PYTEST_ARGV,
-                      network=True, log_path=log_dir / "suite-networked.log")
+    net_proc = run_in(image, repo, PYTEST_ARGV, network=True,
+                      log_path=log_dir / "suite-networked.log", user=user)
     net_outcomes = parse_outcomes(net_proc.stdout)
     net_failures = {nid for nid, o in net_outcomes.items()
                     if o in ("FAILED", "ERROR")}
@@ -268,11 +398,11 @@ def measure(image, repo, log_dir, runs=5):
     if target:
         started = time.monotonic()
         run_in(image, repo, ["python", "-m", "pytest", target, "-q"],
-               network=False, log_path=log_dir / "targeted-cold.log")
+               network=False, log_path=log_dir / "targeted-cold.log", user=user)
         cold = round(time.monotonic() - started, 2)
         started = time.monotonic()
         run_in(image, repo, ["python", "-m", "pytest", target, "-q"],
-               network=False, log_path=log_dir / "targeted-warm.log")
+               network=False, log_path=log_dir / "targeted-warm.log", user=user)
         warm = round(time.monotonic() - started, 2)
 
     total = len(all_ids)
@@ -288,6 +418,7 @@ def measure(image, repo, log_dir, runs=5):
     collected = total > 0
     return {
         "test_count": total,
+        "container_user": user or "root",
         "collected": collected,
         "collection_error": "" if collected else _collection_error(first_output),
         "head_green": collected and len(sealed_failures) == 0,

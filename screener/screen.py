@@ -120,6 +120,12 @@ def cmd_tier_a(args):
     return 0
 
 
+def tierb_default_user():
+    """Read the default lazily so screen.py does not import tierb at parse time."""
+    import tierb
+    return tierb.DEFAULT_CONTAINER_USER
+
+
 def cmd_tier_b(args):
     import gates
     import gitmeta
@@ -166,8 +172,15 @@ def cmd_tier_b(args):
             append_record(TIER_B, record)
             continue
 
+        # The build may have generated source files inside the image's
+        # /repo; the measurement mount would otherwise replace them.
+        generated = tierb.sync_generated(image, repo, log_dir)
+        record["generated_restored"] = generated[:20]
+        record["generated_count"] = len(generated)
+
         record["operator_minutes"] = operator_minutes_for(name, args)
-        record.update(tierb.measure(image, repo, log_dir))
+        record.update(tierb.measure(image, repo, log_dir,
+                                    user=args.container_user))
         record.update(tierb.budgets(record))
         status, reason = gates.evaluate_tier_b(record)
         record.update(status=status, reason=reason)
@@ -205,6 +218,14 @@ def main(argv=None):
     b = sub.add_parser("tier-b", help="container build and suite measurement, finalists only")
     b.add_argument("--top", type=int, default=4)
     b.add_argument("--force", action="store_true")
+    b.add_argument("--container-user", default=tierb_default_user(),
+                   metavar="UID:GID",
+                   help="uid:gid the suite runs as inside the container "
+                        "(default 1000:1000). Pass an empty string to run as "
+                        "root, which is NOT recommended: root bypasses Unix "
+                        "permission bits, manufacturing false failures on "
+                        "tests that assert access is denied and masking real "
+                        "ones. The value used is recorded per repo.")
     b.add_argument("--only", action="append", default=[], metavar="NAME",
                    help="restrict to these finalists, e.g. --only click. "
                         "Filters WITHIN the top N -- it never promotes a repo "

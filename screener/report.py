@@ -42,6 +42,7 @@ A_COLUMNS = [
 B_COLUMNS = [
     ("env_rung", "rung"),
     ("install_strategy", "install"),
+    ("container_user", "user"),
     ("operator_minutes", "op_min"),
     ("head_green", "green"),
     ("test_count", "tests"),
