@@ -870,7 +870,7 @@ def compute_tier_a(commits, tracked, repo, cutoff):
             round(sum(1 for n in source_counts if n >= 3) / len(pairs), 4)
             if pairs else 0.0
         ),
-        "revert_pairs": sum(1 for c in commits if REVERT.match(c.subject)),
+        "revert_commits": sum(1 for c in commits if REVERT.match(c.subject)),
         "hotfix_commits": sum(1 for c in commits if HOTFIX.search(c.subject)),
         "test_map_ratio": round(test_map_ratio(tracked), 4),
         "tracked_files": len(tracked),
@@ -970,6 +970,8 @@ def _g6(r):
 
 def _g7(r):
     if not r.get("lockfile"):
+        if r.get("requirements_unpinned"):
+            return "requirements file present but not pinned (<80% of lines pinned)"
         return "no lockfile or pinned requirements"
     return None
 
@@ -1158,7 +1160,8 @@ A_COLUMNS = [
     ("files_p50", "f_p50"),
     ("files_p90", "f_p90"),
     ("test_map_ratio", "testmap"),
-    ("revert_pairs", "reverts"),
+    ("test_map_ambiguous", "ambig"),
+    ("revert_commits", "reverts"),
     ("hotfix_commits", "hotfix"),
     ("tracked_files", "files"),
     ("python_loc", "loc"),

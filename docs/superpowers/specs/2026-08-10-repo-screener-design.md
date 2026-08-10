@@ -168,8 +168,8 @@ not merely applied — it is itself a finding about how much of modern OSS histo
 | Volume | `commits_total`, `commits_180d`, `commits_since_cutoff`, `candidate_pairs`, `candidate_pairs_fresh`, `excluded_nonhuman` |
 | Yield | `projected_capsules = candidate_pairs × 0.022`, `projected_fresh`, `fresh_share` |
 | Discrimination | files-touched distribution over candidate pairs: p50, p90, `frac_multifile` (≥3 source files touched) |
-| Free labels | `revert_pairs` (message matches `^Revert "`), `hotfix_commits` (message matches `hotfix\|regression\|fixup`, case-insensitive) |
-| Hardening cost | `test_map_ratio` — fraction of test files resolvable to a source file by naming convention (`tests/test_X.py` ↔ `**/X.py`; `test_X.py` adjacent to `X.py`) |
+| Free labels | `revert_commits` (message matches `^Revert "`), `hotfix_commits` (message matches `hotfix\|regression\|fixup`, case-insensitive) |
+| Hardening cost | `test_map_ratio` — fraction of test files resolvable to **exactly one** source file by naming convention (`tests/test_X.py` ↔ `**/X.py`; `test_X.py` adjacent to `X.py`). `conftest.py` is excluded from the population; a stem matching several source files is counted ambiguous, not mapped, and reported as `test_map_ambiguous` |
 | Environment | lockfile kind (`uv.lock`/`poetry.lock`/`requirements*.txt`), `pyproject.toml` present, CI config present, devcontainer or Dockerfile present, compiled-extension markers (`*.pyx`, `Cargo.toml`, `CMakeLists.txt`, `ext_modules` in `setup.py`), service-dependency markers (postgres/mysql/redis/docker-compose referenced in CI or test config) |
 | Labels only | licence, known-benchmark overlap (SWE-bench 12 / SWE-bench Pro / SWE-smith), `diversity_tag` |
 | Scale | tracked file count, Python LOC |
