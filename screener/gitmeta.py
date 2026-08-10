@@ -119,7 +119,16 @@ def clone(url, dest, log_dir, retries=1):
     log_path = Path(log_dir) / "clone.log"
     if _usable_clone(dest, log_path):
         return True
-    cmd = ["git", "clone", "--filter=blob:none", url, str(dest)]
+    # core.autocrlf=false is a MEASUREMENT correctness setting, not a style
+    # preference. Git for Windows defaults it to true, which rewrites LF to
+    # CRLF in the checked-out tree. Tier B bind-mounts that tree into a Linux
+    # container, so a repo whose tests assert on file CONTENT then fails on
+    # bytes this screener introduced. Measured on starlette: four
+    # test_staticfiles failures of the form `assert '123\r\n' == '123\n'`,
+    # against a fixture whose git blob is plain LF. Repos shipping their own
+    # .gitattributes were already immune; the rest were not.
+    cmd = ["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf",
+           "clone", "--filter=blob:none", url, str(dest)]
     for attempt in range(retries + 1):
         try:
             if dest.exists() and not _discard(dest, log_path):
