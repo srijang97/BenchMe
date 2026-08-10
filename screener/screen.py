@@ -79,8 +79,45 @@ def operator_minutes_for(name, args):
 
 
 def cmd_tier_a(args):
-    print("tier-a not implemented yet", file=sys.stderr)
-    return 1
+    import gates
+    import gitmeta
+    import metrics
+
+    candidates = load_candidates(args.candidates)
+    done = read_records(TIER_A)
+    for cand in candidates:
+        name = cand["name"]
+        if not args.force and name in done and is_done(done[name]):
+            print(f"skip {name} ({done[name]['status']})")
+            continue
+        log_dir = LOGS / name
+        dest = WORK / name
+        print(f"tier-a {name} ...", flush=True)
+        record = {"name": name, "url": cand["url"], "tag": cand["tag"],
+                  "note": cand.get("note", ""), "cutoff": args.cutoff}
+        try:
+            # clone() is total by contract, but it stays INSIDE the guard so a
+            # future regression there degrades one candidate instead of
+            # aborting the sweep. Spec section 6: the sweep never aborts.
+            if not gitmeta.clone(cand["url"], dest, log_dir):
+                record.update(status="unavailable",
+                              reason="clone failed after retry")
+                append_record(TIER_A, record)
+                continue
+            commits = gitmeta.log_commits(dest)
+            tracked = gitmeta.tracked_files(dest)
+            record["head_sha"] = gitmeta.head_sha(dest)
+            record.update(metrics.compute_tier_a(commits, tracked, dest,
+                                                 args.cutoff))
+        except Exception as exc:  # a screener bug, not a repo verdict
+            record.update(status="error", reason=f"{type(exc).__name__}: {exc}")
+            append_record(TIER_A, record)
+            continue
+        status, reason = gates.evaluate_tier_a(record)
+        record.update(status=status, reason=reason)
+        append_record(TIER_A, record)
+        print(f"  {status} {reason or ''}")
+    return 0
 
 
 def cmd_tier_b(args):
