@@ -986,10 +986,20 @@ TIER_A_GATES = [
     ("G1", "Python + pytest detected", _g1),
     ("G2", "candidate_pairs >= 360", _g2),
     ("G3", "commits_since_cutoff >= 30", _g3),
-    ("G5", "no compiled extension built from source", _g5),
-    ("G6", "no service dependency on default test path", _g6),
     ("G7", "lockfile or pinned dependencies present", _g7),
 ]
+# G5 and G6 were WITHDRAWN 2026-08-10 alongside G4, for one shared reason: all
+# three scanned the whole repo tree while purporting to describe the primary
+# package's build and test path, so vendored subprojects, examples/ and
+# peripheral CI workflows tripped them. pydantic was eliminated by G5 on
+# pydantic-core/Cargo.toml -- a vendored subproject with its own pyproject.toml,
+# while the root build backend is hatchling and installing pydantic compiles no
+# Rust -- and separately by G6 on .github/workflows/third-party.yml.
+# G5 and G6 also PREDICTED what Tier B MEASURES: B1 builds the container, B2
+# requires the suite green, B4 runs it network-denied. A repo that truly needs a
+# Rust toolchain fails B1; one that truly needs a database fails B2 or B4.
+# _g5 and _g6 are retained, unused, so the ids are not silently reused.
+# compiled_markers and service_markers are still computed and reported.
 
 
 def _b1(r):

@@ -188,9 +188,34 @@ and 3 can be chosen for maximum difference later without re-running Tier A.
 | G1 | Python + pytest detected | v1 ecosystem, per decision register in `PROJECT_KNOWLEDGE_BASE.md` §17 |
 | G2 | `candidate_pairs ≥ 360` | ≥8 capsules at the conservative 2.2% conversion — the stated pivot floor |
 | G3 | `commits_since_cutoff ≥ 30` | a fresh, contamination-resistant stream exists at all |
-| G5 | no compiled extension built **from source** in this repo | environment reconstruction cost |
-| G6 | no service dependency on the default test path | hermeticity |
 | G7 | lockfile present or dependencies fully pinned | determinism |
+
+**G5 and G6 were withdrawn as gates on 2026-08-10**, together with G4 above, and
+for one shared reason. Ids are retired, not reused.
+
+All three scanned the *entire repository tree* while purporting to describe the
+*primary package's* build and test path. Vendored subprojects, `examples/`
+directories and peripheral CI workflows trip them. The case that exposed it:
+`pydantic` was eliminated by G5 on `pydantic-core/Cargo.toml` — a vendored
+subproject with its own `pyproject.toml`, while the root package's build backend
+is `hatchling` and installing pydantic compiles no Rust — and would separately
+have been eliminated by G6 on `.github/workflows/third-party.yml`, an integration
+workflow that is not the default test path. That is the highest-yield candidate in
+the field (35.13 projected capsules against the next survivor's 8.98), removed
+twice over by files irrelevant to whether it can be containerised.
+
+The deeper problem is that G5 and G6 *predict* environment feasibility, which
+**Tier B measures**. B1 builds the container, B2 requires the suite green, and B4
+runs it with network denied. A repo whose build genuinely needs a Rust toolchain
+fails B1; one that genuinely needs a database fails B2 or B4. Predicting a priori
+what a later tier measures empirically adds a false-elimination path and buys
+nothing — and §4.3 already states Tier B is expected to overturn Tier A's ranking.
+
+**The resulting division of labour:** Tier A gates only on what Tier B cannot
+measure — ecosystem (G1), volume (G2), freshness (G3) and determinism (G7). Every
+environment-feasibility question is settled by building. `compiled_markers` and
+`service_markers` are still computed and reported as columns, so a Tier B build
+failure can be read against what Tier A saw.
 
 **G4 was withdrawn as a gate on 2026-08-10** and `test_map_ratio` demoted to a
 reported column. Gate ids are not renumbered — G4 is retired, not reused.
