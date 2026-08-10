@@ -109,11 +109,15 @@ def cmd_tier_a(args):
             record["head_sha"] = gitmeta.head_sha(dest)
             record.update(metrics.compute_tier_a(commits, tracked, dest,
                                                  args.cutoff))
+            # evaluate_tier_a stays INSIDE the guard. It reads a record that a
+            # partial failure upstream may have left malformed, so a KeyError
+            # or TypeError here is a screener bug and must degrade this one
+            # candidate rather than abort the sweep.
+            status, reason = gates.evaluate_tier_a(record)
         except Exception as exc:  # a screener bug, not a repo verdict
             record.update(status="error", reason=f"{type(exc).__name__}: {exc}")
             append_record(TIER_A, record)
             continue
-        status, reason = gates.evaluate_tier_a(record)
         record.update(status=status, reason=reason)
         append_record(TIER_A, record)
         print(f"  {status} {reason or ''}")
@@ -153,38 +157,51 @@ def cmd_tier_b(args):
             continue
         repo = WORK / name
         log_dir = LOGS / name
-        record = {"name": name, "tag": cand.get("tag"),
-                  "head_sha": gitmeta.head_sha(repo)}
-        tracked = gitmeta.tracked_files(repo)
-        rung, source = tierb.detect_rung(repo, tracked)
-        record["env_rung"] = rung
-        record["env_source"] = source
-        print(f"tier-b {name}: rung {rung} ({source})", flush=True)
-        if rung == 0:
-            record.update(status="gated:B1",
-                          reason="no usable environment definition",
-                          operator_minutes=0)
+        record = {"name": name, "tag": cand.get("tag")}
+        # Everything that touches git, docker or the filesystem runs INSIDE
+        # this guard, mirroring cmd_tier_a. Tier B shells out to docker at
+        # five sites, each with its own timeout; before this, any one of them
+        # raising aborted the sweep AND left the offending repo unrecorded, so
+        # the resume path retried it and re-aborted. A screener failure must
+        # degrade one candidate, never the run.
+        try:
+            record["head_sha"] = gitmeta.head_sha(repo)
+            tracked = gitmeta.tracked_files(repo)
+            rung, source = tierb.detect_rung(repo, tracked)
+            record["env_rung"] = rung
+            record["env_source"] = source
+            print(f"tier-b {name}: rung {rung} ({source})", flush=True)
+            if rung == 0:
+                record.update(status="gated:B1",
+                              reason="no usable environment definition",
+                              operator_minutes=0)
+                append_record(TIER_B, record)
+                continue
+
+            image = tierb.build_image(repo, name, rung, log_dir, record=record)
+            if image is None:
+                record.update(status="gated:B1",
+                              reason="docker build failed; see docker-build.log",
+                              operator_minutes=0)
+                append_record(TIER_B, record)
+                continue
+
+            # The build may have generated source files inside the image's
+            # /repo; the measurement mount would otherwise replace them.
+            generated = tierb.sync_generated(image, repo, log_dir)
+            record["generated_restored"] = generated[:20]
+            record["generated_count"] = len(generated)
+
+            record["operator_minutes"] = operator_minutes_for(name, args)
+            skips = config.get(name, {}).get("skip_tests") or []
+            record.update(tierb.measure(image, repo, log_dir,
+                                        user=args.container_user, skips=skips))
+        except Exception as exc:  # a screener bug, not a repo verdict
+            record.update(status="error", reason=f"{type(exc).__name__}: {exc}")
             append_record(TIER_B, record)
+            print(f"  error {type(exc).__name__}: {exc}", file=sys.stderr)
             continue
 
-        image = tierb.build_image(repo, name, rung, log_dir, record=record)
-        if image is None:
-            record.update(status="gated:B1",
-                          reason="docker build failed; see docker-build.log",
-                          operator_minutes=0)
-            append_record(TIER_B, record)
-            continue
-
-        # The build may have generated source files inside the image's
-        # /repo; the measurement mount would otherwise replace them.
-        generated = tierb.sync_generated(image, repo, log_dir)
-        record["generated_restored"] = generated[:20]
-        record["generated_count"] = len(generated)
-
-        record["operator_minutes"] = operator_minutes_for(name, args)
-        skips = config.get(name, {}).get("skip_tests") or []
-        record.update(tierb.measure(image, repo, log_dir,
-                                    user=args.container_user, skips=skips))
         if record.get("stale_skips"):
             print(f"  !! STALE SKIP for {name}: "
                   f"{', '.join(record['stale_skips'])} -- configured in "
@@ -193,6 +210,18 @@ def cmd_tier_b(args):
                   file=sys.stderr, flush=True)
         for sk in record.get("skipped_tests") or []:
             print(f"  skipped {sk['test']}", flush=True)
+
+        # An apparatus error is NOT a gate verdict. A dead container run makes
+        # every id differ between runs, which would otherwise surface as
+        # `gated:B3 flake_rate 1.0` -- eliminating a repo for our fault.
+        if record.get("apparatus_error"):
+            record.update(status="error",
+                          reason=f"apparatus: {record['apparatus_error']}")
+            append_record(TIER_B, record)
+            print(f"  error apparatus: {record['apparatus_error']}",
+                  file=sys.stderr)
+            continue
+
         record.update(tierb.budgets(record))
         status, reason = gates.evaluate_tier_b(record)
         record.update(status=status, reason=reason)

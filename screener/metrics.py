@@ -15,9 +15,17 @@ CONVERSION_RATE = 0.022
 BOT_IDENTITY = re.compile(r"\[bot\]|dependabot|renovate|pre-commit-ci", re.I)
 
 # Bot email anchors first: unambiguous, checked before the bare-name
-# alternatives. The bare names are word-bounded so "Claude" as a human given
-# name (e.g. "Co-authored-by: Claude Dubois <c.dubois@example.com>") does not
-# match on name alone.
+# alternatives.
+#
+# The bare names are word-bounded, but word-bounding does NOT protect a human
+# given name: `\bclaude\b` matches
+# "Co-authored-by: Claude Dubois <c.dubois@example.com>" and that commit is
+# excluded. That over-exclusion is deliberate -- see is_human_commit: dropping
+# one human's commit costs a single candidate out of hundreds, whereas
+# admitting an agent's commit reintroduces the circularity the rule exists to
+# prevent. The word boundaries only stop substring hits such as "claudette";
+# they are not a safeguard against real people named Claude, and nothing here
+# should be read as providing one.
 AI_TRAILER = re.compile(
     r"co-authored-by:[^\n]*"
     r"(noreply@anthropic\.com|devin-ai|copilot@|codex@"
@@ -205,7 +213,12 @@ def _test_map_counts(tracked):
 
 
 def test_map_ratio(tracked):
-    """Fraction of test files resolvable to exactly one source file."""
+    """Fraction of test files whose stem resolves to ONE OR MORE source files.
+
+    Not "exactly one". Uniqueness was required by the retired G4 rule and is
+    deliberately not required now -- see _test_map_counts for why. Reported as
+    a diagnostic column; it no longer eliminates anything.
+    """
     matched, _ambiguous, total = _test_map_counts(tracked)
     if not total:
         return 0.0

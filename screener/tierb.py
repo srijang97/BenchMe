@@ -12,6 +12,9 @@ from pathlib import Path, PurePosixPath
 
 BASE_IMAGE = "python:3.12-slim"
 
+# Marks a container run that never produced a verdict of its own.
+TIMEOUT_RETURNCODE = -9
+
 # Non-root by default. See run_in for why root is not a neutral choice.
 DEFAULT_CONTAINER_USER = "1000:1000"
 
@@ -130,6 +133,12 @@ RUN python -m pytest --version
 """
 
 
+def _as_text(value):
+    if value is None:
+        return ""
+    return value.decode("utf-8", "replace") if isinstance(value, bytes) else value
+
+
 def host_path(p):
     """Docker Desktop wants forward slashes: C:/Users/... not C:\\Users\\...
 
@@ -215,11 +224,14 @@ def _export_mode(tag):
     Read from a marker file rather than the build log, which goes silent on
     a cached layer.
     """
-    probe = subprocess.run(
-        ["docker", "run", "--rm", "--network", "none", tag,
-         "cat", "/opt/screener/export-mode"],
-        capture_output=True, text=True, env=docker_env(), encoding="utf-8",
-        errors="replace", timeout=300)
+    try:
+        probe = subprocess.run(
+            ["docker", "run", "--rm", "--network", "none", tag,
+             "cat", "/opt/screener/export-mode"],
+            capture_output=True, text=True, env=docker_env(), encoding="utf-8",
+            errors="replace", timeout=300)
+    except (subprocess.TimeoutExpired, OSError):
+        return LOCKED
     mode = probe.stdout.strip()
     return {"all-groups+extras": LOCKED_ALL,
             "default-groups+extras": LOCKED_EXTRAS,
@@ -261,12 +273,17 @@ def sync_generated(image, repo, log_dir, timeout=600):
     repo = Path(repo)
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
-    listing = subprocess.run(
-        ["docker", "run", "--rm", "--network", "none", image, "sh", "-c",
-         "git config --global --add safe.directory /repo >/dev/null 2>&1; "
-         "cd /repo && git ls-files --others --ignored --exclude-standard"],
-        capture_output=True, text=True, env=docker_env(), encoding="utf-8",
-        errors="replace", timeout=timeout)
+    try:
+        listing = subprocess.run(
+            ["docker", "run", "--rm", "--network", "none", image, "sh", "-c",
+             "git config --global --add safe.directory /repo >/dev/null 2>&1; "
+             "cd /repo && git ls-files --others --ignored --exclude-standard"],
+            capture_output=True, text=True, env=docker_env(),
+            encoding="utf-8", errors="replace", timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        with open(log_dir / "sync-generated.log", "w", encoding="utf-8") as fh:
+            fh.write(f"listing failed, nothing restored: {exc}")
+        return []
     wanted = [ln.strip() for ln in listing.stdout.splitlines()
               if ln.strip()
               and not any(m in ln for m in _CACHE_MARKERS)
@@ -278,11 +295,16 @@ def sync_generated(image, repo, log_dir, timeout=600):
     # pydantic generates enough artefacts to blow the Windows command-length
     # limit outright: `FileNotFoundError: [WinError 206] The filename or
     # extension is too long`.
-    tar = subprocess.run(
-        ["docker", "run", "--rm", "-i", "--network", "none", image,
-         "tar", "-cf", "-", "-C", "/repo", "-T", "-"],
-        input="\n".join(wanted).encode("utf-8"),
-        capture_output=True, env=docker_env(), timeout=timeout)
+    try:
+        tar = subprocess.run(
+            ["docker", "run", "--rm", "-i", "--network", "none", image,
+             "tar", "-cf", "-", "-C", "/repo", "-T", "-"],
+            input="\n".join(wanted).encode("utf-8"),
+            capture_output=True, env=docker_env(), timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        with open(log_dir / "sync-generated.log", "w", encoding="utf-8") as fh:
+            fh.write(f"tar failed, nothing restored: {exc}")
+        return []
     if tar.returncode != 0:
         with open(log_dir / "sync-generated.log", "w", encoding="utf-8") as fh:
             fh.write(tar.stderr.decode("utf-8", "replace"))
@@ -332,8 +354,23 @@ def run_in(image, repo, argv, network, log_path, timeout=3600,
     if not network:
         cmd += ["--network", "none"]
     cmd += [image, *argv]
-    proc = subprocess.run(cmd, capture_output=True, text=True, env=docker_env(),
-                          encoding="utf-8", errors="replace", timeout=timeout)
+    # A hung or unstartable container is a RESULT, not a crash. urllib3's
+    # suite finishes in ~63s and then leaves a non-daemon thread alive, so
+    # PID 1 never returns and `docker run` blocks until the timeout; letting
+    # TimeoutExpired escape would abort the whole sweep and leave the repo
+    # unrecorded, so the resume path would retry and re-abort. Callers get a
+    # CompletedProcess with a non-zero returncode and the reason on stderr.
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              env=docker_env(), encoding="utf-8",
+                              errors="replace", timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        proc = subprocess.CompletedProcess(
+            cmd, TIMEOUT_RETURNCODE, _as_text(exc.stdout),
+            f"SCREENER: container timed out after {timeout}s")
+    except OSError as exc:
+        proc = subprocess.CompletedProcess(
+            cmd, TIMEOUT_RETURNCODE, "", f"SCREENER: docker run failed: {exc}")
     Path(log_path).parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "w", encoding="utf-8") as fh:
         fh.write(f"$ {' '.join(cmd)}\n{proc.stdout}\n{proc.stderr}")
@@ -382,6 +419,7 @@ def measure(image, repo, log_dir, runs=5, user=DEFAULT_CONTAINER_USER,
     log_dir = Path(log_dir)
     per_run = []
     durations = []
+    returncodes = []
     first_output = ""
     for i in range(runs):
         started = time.monotonic()
@@ -389,8 +427,33 @@ def measure(image, repo, log_dir, runs=5, user=DEFAULT_CONTAINER_USER,
                       log_path=log_dir / f"suite-{i}.log", user=user)
         durations.append(time.monotonic() - started)
         per_run.append(parse_outcomes(proc.stdout))
+        # Recorded for diagnosis: run_in returns TIMEOUT_RETURNCODE rather than
+        # raising when a container hangs, so a dead run is visible here.
+        returncodes.append(proc.returncode)
         if i == 0:
             first_output = f"{proc.stdout}\n{proc.stderr}"
+
+    # A run that produced no outcomes, or wildly fewer than its siblings, did
+    # not measure anything -- a dead container, a docker hiccup, or a timeout.
+    # Treated as APPARATUS error, never as flakiness. Left unchecked it is a
+    # false `gated:B3`: the empty run contributes no failures so the
+    # deterministic intersection stays empty and B2 passes, then every id
+    # differs across runs and flake_rate goes to ~1.0. That is the same shape
+    # as the `-v -q` defect that once reported a clean suite as 100% flaky.
+    counts = [len(r) for r in per_run]
+    median = sorted(counts)[len(counts) // 2] if counts else 0
+    bad_runs = [i for i, c in enumerate(counts)
+                if c == 0 or (median and c < median * 0.5)]
+    apparatus_error = ""
+    if bad_runs and median:
+        apparatus_error = (
+            f"sealed runs {bad_runs} produced {[counts[i] for i in bad_runs]} "
+            f"outcomes against a median of {median} "
+            f"(returncodes {[returncodes[i] for i in bad_runs]}); "
+            f"the container did not measure the suite")
+    elif counts and not median:
+        apparatus_error = ("no sealed run produced any outcome; "
+                           "the suite never ran")
 
     all_ids = set().union(*per_run) if per_run else set()
     flaky = [nid for nid in all_ids
@@ -440,6 +503,14 @@ def measure(image, repo, log_dir, runs=5, user=DEFAULT_CONTAINER_USER,
     # network dependency. Measured on urllib3, whose entire reported
     # `net_dependent_tests` set was a subset of `flaky_tests`. B4 acts on
     # this set, so the confusion was a live false-signal path.
+    # CRITICAL: these are subtracted from the B2 failure set below.
+    # Previously `head_green` required `sealed_failures` to be empty while
+    # `net_dependent` was derived FROM `sealed_failures`, so B4 was only ever
+    # reached when its own input was provably empty -- it could neither
+    # eliminate nor rescue anything, and a repo whose only failures were
+    # network-dependent (B4's exact design case) was booked
+    # `gated:B2 "suite not green at HEAD"`. A network-dependent failure must
+    # produce a network-dependent reason.
     net_dependent = sorted(sealed_failures - net_failures)
 
     target = next((nid for nid, o in baseline.items() if o == "PASSED"), None)
@@ -453,6 +524,9 @@ def measure(image, repo, log_dir, runs=5, user=DEFAULT_CONTAINER_USER,
         run_in(image, repo, ["python", "-m", "pytest", target, "-q"],
                network=False, log_path=log_dir / "targeted-warm.log", user=user)
         warm = round(time.monotonic() - started, 2)
+
+    # B2 judges what is genuinely broken; B4 judges what merely needs egress.
+    broken = sealed_failures - set(net_dependent)
 
     total = len(all_ids)
     prefixes = {nid.split("::")[0] for nid in net_dependent}
@@ -470,9 +544,12 @@ def measure(image, repo, log_dir, runs=5, user=DEFAULT_CONTAINER_USER,
         "container_user": user or "root",
         "collected": collected,
         "collection_error": "" if collected else _collection_error(first_output),
-        "head_green": collected and len(sealed_failures) == 0,
-        "head_failures": sorted(sealed_failures)[:20],
-        "head_failure_count": len(sealed_failures),
+        "head_green": collected and not apparatus_error and len(broken) == 0,
+        "head_failures": sorted(broken)[:20],
+        "head_failure_count": len(broken),
+        "apparatus_error": apparatus_error,
+        "bad_runs": bad_runs,
+        "suite_returncodes": returncodes,
         "intermittent_failures": sorted(intermittent)[:20],
         "intermittent_count": len(intermittent),
         "skipped_tests": [dict(s) for s in skips

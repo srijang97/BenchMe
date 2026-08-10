@@ -132,6 +132,14 @@ def render(tier_a, tier_b, cutoff, screener_sha):
         out.append("")
         out.append("`harden_h` and `verify_h` are soft thresholds, not gates, "
                    "and do not affect ranking.")
+        out.append("")
+        out.append("**Budget caveat.** `warm_s` measures a whole `docker run` "
+                   "per invocation, not test execution: on click warm (0.90 s) "
+                   "and cold (0.93 s) are indistinguishable because both are "
+                   "dominated by container startup. `harden_h` is therefore "
+                   "roughly *invocations x container start*, not a measured "
+                   "hardening cost. Hardening that reuses one container would "
+                   "be substantially cheaper than the figure shown.")
         skipped = [(r["name"], sk) for r in b_records
                    for sk in (r.get("skipped_tests") or [])]
         if skipped:
@@ -174,12 +182,33 @@ def render(tier_a, tier_b, cutoff, screener_sha):
                    f"hardening budget {top.get('hardening_hours')} h.\n")
         out.append("Runners-up by diversity tag, for repos 2 and 3 without "
                    "re-running Tier A:\n")
+        # Runners-up are restricted to Tier B PASSERS, and anything else is
+        # labelled explicitly. Deduplicating on diversity tag alone offered
+        # urllib3 -- gated:B2 in section 4 -- as repo 2 while suppressing
+        # starlette, which shares the `io` tag and passed cleanly. The list
+        # exists to pick maximally different repos that actually work, so a
+        # gated or unmeasured entry must never be quoted as settled.
         seen = {top.get("tag")}
         for r in survivors:
-            if r.get("tag") not in seen:
-                out.append(f"- `{r['name']}` ({r.get('tag')}) — "
-                           f"{r.get('projected_capsules')} projected capsules")
-                seen.add(r.get("tag"))
+            tag = r.get("tag")
+            if tag in seen:
+                continue
+            same = [x for x in survivors if x.get("tag") == tag]
+            passer = next(
+                (x for x in same
+                 if tier_b.get(x["name"], {}).get("status") == "passed"), None)
+            chosen = passer or same[0]
+            status = tier_b.get(chosen["name"], {}).get("status")
+            if status == "passed":
+                label = ""
+            elif status:
+                label = f" — **not selectable: Tier B `{status}`**"
+            else:
+                label = " — **not measured in Tier B**"
+            out.append(f"- `{chosen['name']}` ({tag}) — "
+                       f"{chosen.get('projected_capsules')} projected "
+                       f"capsules{label}")
+            seen.add(tag)
     else:
         out.append("No finalist cleared Tier B. Review the gate ledger.")
     out.append("")
