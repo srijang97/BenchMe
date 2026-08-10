@@ -47,6 +47,7 @@ B_COLUMNS = [
     ("head_green", "green"),
     ("test_count", "tests"),
     ("head_failure_count", "hard_fail"),
+    ("skipped_count", "skipped"),
     ("intermittent_count", "intermit"),
     ("flake_rate", "flake"),
     ("suite_runtime_p50", "suite_s"),
@@ -129,16 +130,42 @@ def render(tier_a, tier_b, cutoff, screener_sha):
     if b_records:
         out.append(_table(b_records, B_COLUMNS))
         out.append("")
-        out.append("`harden_h` and `verify_h` are soft thresholds, not gates.")
+        out.append("`harden_h` and `verify_h` are soft thresholds, not gates, "
+                   "and do not affect ranking.")
+        skipped = [(r["name"], sk) for r in b_records
+                   for sk in (r.get("skipped_tests") or [])]
+        if skipped:
+            out.append("")
+            out.append("**Recorded B2 skips.** Gate B2 reads \"all tests pass "
+                       "at HEAD, modulo a recorded skip list\". Every skip is "
+                       "declared in `candidates.yaml` and reproduced here so "
+                       "it is never silently invisible:\n")
+            for name, sk in skipped:
+                out.append(f"- `{name}` — `{sk['test']}`  \n  "
+                           f"{sk.get('reason', '').strip()}")
+        stale = [(r["name"], s) for r in b_records
+                 for s in (r.get("stale_skips") or [])]
+        if stale:
+            out.append("")
+            out.append("**STALE SKIPS — these matched no test that ran.** A "
+                       "stale skip can hide a real failure and must be fixed "
+                       "or removed:\n")
+            for name, s in stale:
+                out.append(f"- `{name}` — `{s}`")
     else:
         out.append("Tier B has not been run.")
     out.append("")
 
     out.append("## 5. Recommendation\n")
     passed_b = [r for r in b_records if r.get("status") == "passed"]
-    # `or 1e9`, not a default: hardening_hours is None for an unmeasured
-    # budget, and None sorts against float with a TypeError.
-    passed_b.sort(key=lambda r: r.get("hardening_hours") or 1e9)
+    # Ranked on `projected_capsules`, the spec's single ranking key, read
+    # from the Tier A record. It was previously sorted on `hardening_hours`,
+    # which the spec declares a SOFT THRESHOLD precisely so it decides
+    # nothing -- that silently promoted a budget estimate to the corpus
+    # selection key and picked an 8.98-capsule repo over a 15.51-capsule one.
+    # Budgets stay as reported columns: they inform, they do not choose.
+    passed_b.sort(key=lambda r: tier_a.get(r["name"], {}).get(
+        "projected_capsules", 0), reverse=True)
     if passed_b:
         top = passed_b[0]
         out.append(f"**Corpus repo: `{top['name']}`** — cleared Tier A and "

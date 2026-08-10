@@ -374,7 +374,8 @@ def _collection_error(output, limit=400):
     return " | ".join(interesting)[:limit] if interesting else output[-limit:].strip()
 
 
-def measure(image, repo, log_dir, runs=5, user=DEFAULT_CONTAINER_USER):
+def measure(image, repo, log_dir, runs=5, user=DEFAULT_CONTAINER_USER,
+            skips=()):
     """Five sealed suite runs, one networked run, and targeted-test latency."""
     import time
 
@@ -410,8 +411,19 @@ def measure(image, repo, log_dir, runs=5, user=DEFAULT_CONTAINER_USER):
     # B3's 0.5% threshold, and B2 must not double-count them.
     failing = [{nid for nid, o in run.items() if o in ("FAILED", "ERROR")}
                for run in per_run]
-    sealed_failures = set.intersection(*failing) if failing else set()
-    intermittent = (set.union(*failing) - sealed_failures) if failing else set()
+    deterministic = set.intersection(*failing) if failing else set()
+    intermittent = (set.union(*failing) - deterministic) if failing else set()
+
+    # Recorded skip list, per spec gate B2 ("modulo a recorded skip list").
+    # A skip removes a test from the B2 failure set and nothing else: it does
+    # not touch flake_rate, and it is surfaced in the record and the report so
+    # a skipped test is never silently invisible. A configured skip matching
+    # no test that actually ran is reported as STALE rather than ignored --
+    # a stale skip is how a real failure gets hidden later.
+    skip_ids = {s["test"] for s in skips}
+    skips_matched = skip_ids & all_ids
+    stale_skips = sorted(skip_ids - all_ids)
+    sealed_failures = deterministic - skip_ids
 
     net_proc = run_in(image, repo, PYTEST_ARGV, network=True,
                       log_path=log_dir / "suite-networked.log", user=user)
@@ -463,6 +475,11 @@ def measure(image, repo, log_dir, runs=5, user=DEFAULT_CONTAINER_USER):
         "head_failure_count": len(sealed_failures),
         "intermittent_failures": sorted(intermittent)[:20],
         "intermittent_count": len(intermittent),
+        "skipped_tests": [dict(s) for s in skips
+                          if s["test"] in skips_matched],
+        "skipped_count": len(skips_matched),
+        "stale_skips": stale_skips,
+        "stale_skip_count": len(stale_skips),
         "flake_rate": round(len(flaky) / total, 5) if total else 1.0,
         "flaky_tests": flaky[:20],
         "suite_runtime_p50": round(sorted(durations)[len(durations) // 2], 2),

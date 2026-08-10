@@ -132,6 +132,9 @@ def cmd_tier_b(args):
     import tierb
 
     tier_a = read_records(TIER_A)
+    # Per-repo config lives in candidates.yaml so it is version-controlled and
+    # visible beside the candidate: currently the recorded B2 skip list.
+    config = {c["name"]: c for c in load_candidates(args.candidates)}
     finalists = gates.rank(list(tier_a.values()))[: args.top]
     if not finalists:
         print("no Tier A survivors", file=sys.stderr)
@@ -179,8 +182,17 @@ def cmd_tier_b(args):
         record["generated_count"] = len(generated)
 
         record["operator_minutes"] = operator_minutes_for(name, args)
+        skips = config.get(name, {}).get("skip_tests") or []
         record.update(tierb.measure(image, repo, log_dir,
-                                    user=args.container_user))
+                                    user=args.container_user, skips=skips))
+        if record.get("stale_skips"):
+            print(f"  !! STALE SKIP for {name}: "
+                  f"{', '.join(record['stale_skips'])} -- configured in "
+                  f"candidates.yaml but matched no test that ran. A stale "
+                  f"skip can hide a real failure; fix or remove it.",
+                  file=sys.stderr, flush=True)
+        for sk in record.get("skipped_tests") or []:
+            print(f"  skipped {sk['test']}", flush=True)
         record.update(tierb.budgets(record))
         status, reason = gates.evaluate_tier_b(record)
         record.update(status=status, reason=reason)

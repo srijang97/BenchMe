@@ -6,6 +6,21 @@ candidates:
     url: https://github.com/pydantic/pydantic.git
     tag: logic
     note: Default pick. Rust core arrives as a pinned wheel so G5 should hold.
+    # Spec gate B2 reads "all tests pass at HEAD, modulo a recorded skip list".
+    # This is that provision's first use. Skips are per-repo, version-controlled
+    # and rendered in REPORT.md; a skip that matches nothing is reported loudly
+    # rather than passing quietly, because a stale skip is how a real failure
+    # gets hidden later.
+    skip_tests:
+      - test: tests/test_exports.py::test_public_internal
+        reason: >-
+          Exercises pydantic's own mypy-plugin internals against
+          mypy.expandtype.ExpandTypeVisitor at the mypy version pydantic's own
+          lockfile pins (2.3.0). Tooling hygiene, not library behaviour, and
+          nothing a mined capsule would ever exercise. Fails deterministically
+          in all five sealed runs; pydantic's CI never sees it because its test
+          job installs --group testing-extra rather than --all-groups, so mypy
+          is absent and the plugin import path is never taken.
   - name: attrs
     url: https://github.com/python-attrs/attrs.git
     tag: logic
