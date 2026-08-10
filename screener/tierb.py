@@ -37,7 +37,8 @@ def detect_rung(repo, tracked):
 
 
 LOCKED = "uv-export-locked"
-LOCKED_ALL = "uv-locked-all-groups"
+LOCKED_ALL = "uv-locked-all-groups+extras"
+LOCKED_EXTRAS = "uv-locked-default-groups+extras"
 LOCKED_DEFAULT = "uv-locked-default-groups"
 RESOLVED = "uv-resolved"
 REPO_DOCKERFILE = "repo-dockerfile"
@@ -48,12 +49,28 @@ REPO_DOCKERFILE = "repo-dockerfile"
 # replaces the whole directory and takes that venv with it. The suite would
 # then run against a bare interpreter. Exporting to the system site-packages
 # puts the environment outside the mount point, where it survives.
-_LOCKED_INSTALL = """RUN mkdir -p /opt/screener \
- && ( uv export --frozen --no-hashes --no-emit-project --all-groups \
-        -o /tmp/requirements.txt \
-      && echo all-groups > /opt/screener/export-mode ) \
- || ( uv export --frozen --no-hashes --no-emit-project \
-        -o /tmp/requirements.txt \
+_EXPORT = "uv export --frozen --no-hashes --no-emit-project"
+
+# Three genuine strategies, tried in order, each recorded distinctly.
+#
+# `--all-extras` is not optional polish: extras are the PACKAGE's own declared
+# functionality and its tests exercise them. pydantic keeps `email-validator`
+# in `[project.optional-dependencies]`, which `--all-groups` does NOT cover,
+# and four of its tests failed on `No module named 'email_validator'` purely
+# because of that gap. pydantic's own Makefile installs
+# `--all-groups --all-packages --all-extras`, so this matches what the project
+# tells its developers to run.
+#
+# The fallbacks exist because `--all-groups` FAILS outright on a project that
+# declares conflicting groups -- measured on urllib3: `Groups 'dev' and
+# 'dev-min-pyopenssl' are incompatible`. Without them such a repo books a
+# `gated:B1` build failure, which would be a false elimination.
+_LOCKED_INSTALL = f"""RUN mkdir -p /opt/screener \
+ && ( {_EXPORT} --all-groups --all-extras -o /tmp/requirements.txt \
+      && echo all-groups+extras > /opt/screener/export-mode ) \
+ || ( {_EXPORT} --all-extras -o /tmp/requirements.txt \
+      && echo default-groups+extras > /opt/screener/export-mode ) \
+ || ( {_EXPORT} -o /tmp/requirements.txt \
       && echo default-groups > /opt/screener/export-mode )
 RUN uv pip install --system -r /tmp/requirements.txt \
  && uv pip install --system --no-deps -e .
@@ -204,11 +221,9 @@ def _export_mode(tag):
         capture_output=True, text=True, env=docker_env(), encoding="utf-8",
         errors="replace", timeout=300)
     mode = probe.stdout.strip()
-    if mode == "all-groups":
-        return LOCKED_ALL
-    if mode == "default-groups":
-        return LOCKED_DEFAULT
-    return LOCKED
+    return {"all-groups+extras": LOCKED_ALL,
+            "default-groups+extras": LOCKED_EXTRAS,
+            "default-groups": LOCKED_DEFAULT}.get(mode, LOCKED)
 
 
 def _write_build_log(log_dir, stdout, stderr):
@@ -380,8 +395,23 @@ def measure(image, repo, log_dir, runs=5, user=DEFAULT_CONTAINER_USER):
     flaky = [nid for nid in all_ids
              if len({run.get(nid) for run in per_run}) > 1]
     baseline = per_run[0] if per_run else {}
-    sealed_failures = {nid for nid, o in baseline.items()
-                       if o in ("FAILED", "ERROR")}
+
+    # B2 is DETERMINISTIC failure only: a test counts as a head failure when
+    # it fails in EVERY sealed run. The suite is run five times precisely to
+    # characterise flakiness, so deciding green/not-green from per_run[0]
+    # threw four fifths of the evidence away and made the verdict depend on
+    # which run happened to be first. Measured on urllib3: its HTTP/2 probe
+    # test fails in runs 0-3 and passes in run 4, which produced `gated:B2`
+    # on a coin flip while B3 -- the gate that exists for exactly this --
+    # passed it at 0.153%.
+    #
+    # Intermittent failures are reported separately rather than folded in.
+    # They are flakiness, they are already priced by `flake_rate` against
+    # B3's 0.5% threshold, and B2 must not double-count them.
+    failing = [{nid for nid, o in run.items() if o in ("FAILED", "ERROR")}
+               for run in per_run]
+    sealed_failures = set.intersection(*failing) if failing else set()
+    intermittent = (set.union(*failing) - sealed_failures) if failing else set()
 
     net_proc = run_in(image, repo, PYTEST_ARGV, network=True,
                       log_path=log_dir / "suite-networked.log", user=user)
@@ -391,6 +421,13 @@ def measure(image, repo, log_dir, runs=5, user=DEFAULT_CONTAINER_USER):
     # Failing sealed but passing networked: these are network-dependent, not
     # agent mistakes. The runner denies egress by design, so without this diff
     # they would be misattributed later.
+    #
+    # Uses the DETERMINISTIC failure set, which also fixes a contamination
+    # this diff had while it was based on run 0: a flaky test that happened
+    # to fail sealed and pass networked was indistinguishable from a genuine
+    # network dependency. Measured on urllib3, whose entire reported
+    # `net_dependent_tests` set was a subset of `flaky_tests`. B4 acts on
+    # this set, so the confusion was a live false-signal path.
     net_dependent = sorted(sealed_failures - net_failures)
 
     target = next((nid for nid, o in baseline.items() if o == "PASSED"), None)
@@ -423,6 +460,9 @@ def measure(image, repo, log_dir, runs=5, user=DEFAULT_CONTAINER_USER):
         "collection_error": "" if collected else _collection_error(first_output),
         "head_green": collected and len(sealed_failures) == 0,
         "head_failures": sorted(sealed_failures)[:20],
+        "head_failure_count": len(sealed_failures),
+        "intermittent_failures": sorted(intermittent)[:20],
+        "intermittent_count": len(intermittent),
         "flake_rate": round(len(flaky) / total, 5) if total else 1.0,
         "flaky_tests": flaky[:20],
         "suite_runtime_p50": round(sorted(durations)[len(durations) // 2], 2),

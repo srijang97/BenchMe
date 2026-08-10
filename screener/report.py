@@ -46,6 +46,8 @@ B_COLUMNS = [
     ("operator_minutes", "op_min"),
     ("head_green", "green"),
     ("test_count", "tests"),
+    ("head_failure_count", "hard_fail"),
+    ("intermittent_count", "intermit"),
     ("flake_rate", "flake"),
     ("suite_runtime_p50", "suite_s"),
     ("targeted_latency_warm", "warm_s"),
