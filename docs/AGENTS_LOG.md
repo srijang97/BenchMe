@@ -55,7 +55,9 @@ model-independent.
   - `screener/out/REPORT.md` + `tier_a.jsonl` / `tier_b.jsonl` — gate ledger and measurements, 18 repos
 - **Decision — corpus repo is `pydantic`**, 35.13 projected capsules, passing all four Tier B gates
   (6,884 tests, 0 deterministic failures, 1 recorded skip, flake rate 0.0, hardening 2.77 h).
-  Runners-up by diversity tag for repos 2 and 3: `starlette` (io, 8.98), `click` (cli, 8.98).
+  Runners-up by diversity tag for repos 2 and 3: `urllib3` (io, 15.51), `click` (cli, 8.98).
+  All four Tier A survivors ultimately passed Tier B; `starlette` (io, 8.98) is suppressed only because
+  `urllib3` holds the `io` slot at higher yield.
 - **Decisions made**:
   - First artifact varies the **model-tier** axis (segment 1). At MDE ≈12.5 pp, frontier-vs-frontier
     (~3 pp) and prompt-level (~2 pp) effects are not observable, so only tier-scale effects qualify.
@@ -79,10 +81,17 @@ model-independent.
   collected tests twice. **Gate B4 was unreachable by construction** — its input set could only be
   non-empty when B2 had already eliminated the repo — so the repo it existed to rescue was eliminated
   with a reason pointing elsewhere. I had triaged that as a deferred minor; the final review caught it.
+  Caveat, stated because it matters: B4's corrected routing is confirmed synthetically and by replaying
+  the stored record from the sweep that exposed it, but **B4 has still never fired on live data** —
+  no finalist has since produced a network-dependent failure.
 - **Open questions left**:
-  - **k=5 does not stabilise a binary verdict.** `urllib3` returned three different Tier B outcomes
-    across three sweeps on an unstable pyopenssl HTTP/2 test. Correcting B2 from 1-of-5 to 5-of-5 raised
-    the bar without removing the coin flip. Independent echo of arXiv 2602.07150's "36 runs for +1 pp".
+  - **Cross-sweep instability that k=5 cannot see.** `urllib3`'s Tier B verdict flipped across sweeps:
+    2 passed, 1 gated. Stated carefully, because an earlier draft of this entry overstated it — most of
+    that instability was **our own B4 defect**, and under the corrected code the gated sweep would also
+    have passed. The residual finding is still real and still awkward: a pyopenssl HTTP/2 variant failed
+    5-of-5 in one sweep having passed in others, so five runs *within* a sweep cannot detect variance
+    that lives *between* sweeps. Consistent in direction with arXiv 2602.07150's "36 runs for +1 pp",
+    but this is n=3 sweeps on one repo and should not be cited as more.
   - **The fresh stream is ~4× thinner than estimated**: `projected_fresh` is 0.77 (pydantic) and 0.81
     (click) — under *one* contamination-resistant capsule per repo. Contamination is effectively
     unavoidable for this corpus; report the fresh/stale split beside every downstream result.
