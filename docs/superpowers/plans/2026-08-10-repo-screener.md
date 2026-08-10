@@ -460,6 +460,24 @@ git add screener/gitmeta.py
 git commit -m "feat(screener): blobless clone and git log parsing"
 ```
 
+> **Amended during execution (2026-08-10).** The code above shipped with two
+> exception-safety defects that review caught. `clone()` is required to be
+> *total* — it signals failure by returning `False` so the candidate is recorded
+> `unavailable` and the sweep continues. As written it could raise on two paths:
+> `subprocess.TimeoutExpired` from `_run`, and a leftover partial `.git`
+> short-circuiting to `True` and then failing downstream. The shipped module adds
+> `_usable_clone()` (verifies `git rev-parse --verify HEAD`) and `_discard()`
+> (removes an unusable clone, with a chmod fallback for git's read-only objects),
+> and catches `TimeoutExpired` in `clone()` only.
+>
+> Note the boundary: `_run` logs the timeout and **re-raises**. Only `clone()`
+> catches it. `log_commits`, `tracked_files` and `head_sha` must be allowed to
+> raise, because they run inside the orchestrator's `try/except` where an
+> exception is the intended `error` signal — swallowing a timeout there would
+> turn a hung `git log` into an empty commit list and a fabricated metric.
+>
+> See `screener/gitmeta.py` for the authoritative implementation.
+
 ---
 
 ## Task 3: The candidate-pair rule
@@ -1051,11 +1069,15 @@ def cmd_tier_a(args):
         print(f"tier-a {name} ...", flush=True)
         record = {"name": name, "url": cand["url"], "tag": cand["tag"],
                   "note": cand.get("note", ""), "cutoff": args.cutoff}
-        if not gitmeta.clone(cand["url"], dest, log_dir):
-            record.update(status="unavailable", reason="clone failed after retry")
-            append_record(TIER_A, record)
-            continue
         try:
+            # clone() is total by contract, but it stays INSIDE the guard so a
+            # future regression there degrades one candidate instead of
+            # aborting the sweep. Spec section 6: the sweep never aborts.
+            if not gitmeta.clone(cand["url"], dest, log_dir):
+                record.update(status="unavailable",
+                              reason="clone failed after retry")
+                append_record(TIER_A, record)
+                continue
             commits = gitmeta.log_commits(dest)
             tracked = gitmeta.tracked_files(dest)
             record["head_sha"] = gitmeta.head_sha(dest)
