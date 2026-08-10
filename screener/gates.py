@@ -41,6 +41,11 @@ def _g4(r):
 
 
 def _g5(r):
+    """RETIRED -- withdrawn from TIER_A_GATES, see the note above TIER_A_GATES.
+
+    Kept unused and deliberately: `compiled_markers` is still computed and
+    still reported, it simply stops being fatal.
+    """
     m = r.get("compiled_markers") or []
     if m:
         return f"compiled extension built from source: {', '.join(m[:3])}"
@@ -48,6 +53,11 @@ def _g5(r):
 
 
 def _g6(r):
+    """RETIRED -- withdrawn from TIER_A_GATES, see the note above TIER_A_GATES.
+
+    Kept unused and deliberately: `service_markers` is still computed and
+    still reported, it simply stops being fatal.
+    """
     m = r.get("service_markers") or []
     if m:
         return f"service dependency referenced in: {', '.join(m[:3])}"
@@ -62,24 +72,45 @@ def _g7(r):
     return None
 
 
-# G4 (test_map_ratio >= 0.5) is RETIRED, not reused. The id stays burned so a
-# future gate cannot silently inherit it and make the ledger's history lie.
+# G4, G5 and G6 are RETIRED, not reused. Each id stays burned so a future
+# gate cannot silently inherit it and make the ledger's history lie.
 #
-# It was withdrawn because it measured filename convention, not selectability.
+# All three failed the same way: each scanned the ENTIRE repository tree
+# while purporting to describe the primary package's build and test path, so
+# vendored subprojects, examples/ directories and peripheral CI workflows
+# tripped them.
+#
+# G4 (test_map_ratio >= 0.5) measured filename convention, not selectability.
 # Capsules are mined from commits that touch source AND tests, so a capsule's
-# fail-to-pass tests come from the commit itself -- name-based mapping is never
-# required for mutation hardening. Tier B's `targeted_latency` measures the real
-# constraint empirically, on finalists. The live sweep was the evidence: three of
-# three mature repositories failed G4 while being perfectly selectable, because
-# they name test files after behaviours rather than modules.
+# fail-to-pass tests come from the commit itself -- name-based mapping is
+# never required for mutation hardening. Tier B's `targeted_latency` measures
+# the real constraint empirically, on finalists. The live sweep was the
+# evidence: three of three mature repositories failed G4 while being
+# perfectly selectable, because they name test files after behaviours rather
+# than modules.
 #
-# `_g4` is kept above, unused, so the retired rule stays readable.
+# G5 (no compiled extension) and G6 (no service dependency) were withdrawn
+# together for a second, structural reason on top of the tree-wide-scan bug:
+# they PREDICT environment feasibility, which Tier B MEASURES. B1 builds the
+# container, B2 requires the suite green at HEAD, B4 runs it with network
+# denied. A repo that genuinely needs a Rust toolchain fails B1; one that
+# genuinely needs a database fails B2 or B4. Predicting a priori what a later
+# tier measures empirically only adds a false-elimination path. The evidence:
+# pydantic -- the highest-yield candidate in the field at 35.13 projected
+# capsules against the next survivor's 8.98 -- was eliminated by G5 on
+# `pydantic-core/Cargo.toml`, a vendored subproject carrying its own
+# pyproject.toml, while the root package's build backend is hatchling and
+# installing pydantic compiles no Rust. It would separately have been
+# eliminated by G6 on `.github/workflows/third-party.yml`, a third-party
+# integration workflow that is not the default test path.
+#
+# `_g4`, `_g5` and `_g6` are kept above, unused, so the retired rules stay
+# readable. `compiled_markers` and `service_markers` are still computed by
+# `compute_tier_a` and still reported; they simply stop eliminating.
 TIER_A_GATES = [
     ("G1", "Python + pytest detected", _g1),
     ("G2", "candidate_pairs >= 360", _g2),
     ("G3", "commits_since_cutoff >= 30", _g3),
-    ("G5", "no compiled extension built from source", _g5),
-    ("G6", "no service dependency on default test path", _g6),
     ("G7", "lockfile or pinned dependencies present", _g7),
 ]
 
