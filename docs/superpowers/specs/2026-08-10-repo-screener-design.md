@@ -198,9 +198,24 @@ All three scanned the *entire repository tree* while purporting to describe the
 directories and peripheral CI workflows trip them. The case that exposed it:
 `pydantic` was eliminated by G5 on `pydantic-core/Cargo.toml` — a vendored
 subproject with its own `pyproject.toml`, while the root package's build backend
-is `hatchling` and installing pydantic compiles no Rust — and would separately
-have been eliminated by G6 on `.github/workflows/third-party.yml`, an integration
-workflow that is not the default test path. That is the highest-yield candidate in
+is `hatchling` — and would separately have been eliminated by G6 on
+`.github/workflows/third-party.yml`, an integration workflow that is not the
+default test path.
+
+> **Correction, 2026-08-10, after Tier B ran.** The original wording of this
+> paragraph also claimed that "installing pydantic compiles no Rust". That is true
+> of `pip install pydantic` from PyPI and **false** of building this repository
+> from its own lockfile: `uv.lock` declares `pydantic-core` an in-tree editable
+> workspace member, so honouring the lock requires a Rust toolchain. pydantic
+> subsequently failed Tier B gate B2 for exactly that reason.
+>
+> The withdrawal decision stands, and the episode argues for it rather than
+> against it. G5 would have eliminated pydantic on a filename, by a rule that was
+> wrong about `examples/` and vendored trees generally and right here only by
+> luck. Tier B eliminated it on a build that actually failed, with a specific,
+> checkable reason. **Measuring produced a true finding where predicting produced
+> a coincidence** — but the prediction was not baseless, and this spec should not
+> have asserted the stronger claim without building first. That is the highest-yield candidate in
 the field (35.13 projected capsules against the next survivor's 8.98), removed
 twice over by files irrelevant to whether it can be containerised.
 
