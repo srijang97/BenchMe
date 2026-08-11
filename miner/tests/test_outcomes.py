@@ -144,3 +144,95 @@ def test_unlabelled_is_not_a_rejection_signal():
                     "TypeError: nope", "Zzz.Qqq: nope", "gibberish", None]:
         assert isinstance(outcomes.label(message), str)
         assert outcomes.label(message) != ""
+
+
+def test_base_id_strips_parametrisation():
+    assert outcomes.base_id("t.py::test_a[1-2]") == "t.py::test_a"
+    assert outcomes.base_id("t.py::test_a") == "t.py::test_a"
+    # Nested brackets: split on the FIRST "[", so the whole tail goes.
+    assert outcomes.base_id("t.py::test_a[p[q]]") == "t.py::test_a"
+    assert outcomes.base_id("t.py::C::test_a[x - y]") == "t.py::C::test_a"
+
+
+def test_diff_finds_fail_to_pass_and_pass_to_pass():
+    before = {"t.py::new": outcomes.FAILURE, "t.py::old": outcomes.PASSED}
+    after = {"t.py::new": outcomes.PASSED, "t.py::old": outcomes.PASSED}
+    d = outcomes.diff(before, after)
+    assert d["f2p"] == ["t.py::new"]
+    assert d["p2p"] == ["t.py::old"]
+    assert d["broken"] == []
+
+
+def test_diff_excludes_an_error_base_from_f2p_and_records_it():
+    # Decision 2: a test that could not run is not a usable base negative.
+    # It is counted separately so a later audit can measure what the gate
+    # costs -- the mistake round 1 made was rejecting without counting.
+    before = {"t.py::a": outcomes.ERROR}
+    after = {"t.py::a": outcomes.PASSED}
+    d = outcomes.diff(before, after)
+    assert d["f2p"] == []
+    assert d["error_base"] == ["t.py::a"]
+
+
+def test_diff_reports_a_genuinely_broken_test():
+    before = {"t.py::a": outcomes.PASSED}
+    after = {"t.py::a": outcomes.FAILURE}
+    assert outcomes.diff(before, after)["broken"] == ["t.py::a"]
+
+
+def test_diff_treats_a_renumbered_parametrisation_as_a_rename():
+    # THE MEASURED DEFECT. Line numbers shift when the patch is applied, so
+    # the parametrised ids change while the same number of cases still pass.
+    # Booking this as `broken` fabricated 3 of the 10 rejections in the
+    # 2025Q3 batch.
+    before = {
+        "t.py::test_docs[pydantic/types.py:1064-1069]": outcomes.PASSED,
+        "t.py::test_docs[pydantic/types.py:2001-2010]": outcomes.PASSED,
+    }
+    after = {
+        "t.py::test_docs[pydantic/types.py:1071-1076]": outcomes.PASSED,
+        "t.py::test_docs[pydantic/types.py:2008-2017]": outcomes.PASSED,
+    }
+    d = outcomes.diff(before, after)
+    assert d["broken"] == []
+    assert d["renamed"] == [
+        "t.py::test_docs[pydantic/types.py:1064-1069]",
+        "t.py::test_docs[pydantic/types.py:2001-2010]",
+    ]
+
+
+def test_diff_does_not_hide_a_real_loss_behind_a_rename():
+    # Two passed before, only one passes after. The count dropped, so this
+    # is a genuine loss and must NOT be excused as a rename. Without this the
+    # reconciliation would become a blanket amnesty for vanished tests.
+    before = {"t.py::test_d[a]": outcomes.PASSED,
+              "t.py::test_d[b]": outcomes.PASSED}
+    after = {"t.py::test_d[c]": outcomes.PASSED}
+    d = outcomes.diff(before, after)
+    assert d["renamed"] == []
+    assert d["broken"] == ["t.py::test_d[a]", "t.py::test_d[b]"]
+
+
+def test_diff_treats_a_wholly_vanished_test_as_broken():
+    before = {"t.py::gone": outcomes.PASSED}
+    after = {}
+    assert outcomes.diff(before, after)["broken"] == ["t.py::gone"]
+
+
+def test_diff_requires_an_exact_nodeid_match_for_f2p():
+    # A rename is forgivable for a regression test, which only needs to show
+    # nothing was lost. It is NOT forgivable for the oracle: claiming f2p
+    # across two differently-named tests would put a test in the oracle that
+    # never failed on the before side.
+    before = {"t.py::test_d[old]": outcomes.FAILURE}
+    after = {"t.py::test_d[new]": outcomes.PASSED}
+    d = outcomes.diff(before, after)
+    assert d["f2p"] == []
+
+
+def test_diff_ignores_skipped_tests_entirely():
+    before = {"t.py::s": outcomes.SKIPPED}
+    after = {"t.py::s": outcomes.PASSED}
+    d = outcomes.diff(before, after)
+    assert all(d[k] == [] for k in ("f2p", "p2p", "broken", "renamed",
+                                    "error_base"))

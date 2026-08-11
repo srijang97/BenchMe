@@ -136,3 +136,72 @@ def label(message):
     if name == "TypeError":
         return "type_error"
     return f"exception:{name}"
+
+
+def base_id(nodeid):
+    """The node id without its parametrisation, e.g.
+    `t.py::test_a[1-2]` -> `t.py::test_a`.
+
+    Splits on the FIRST "[" so nested brackets in a parameter value
+    (`test_a[p[q]]`, measured) take the whole tail with them.
+    """
+    head, sep, _ = nodeid.partition("[")
+    return head if sep else nodeid
+
+
+def diff(before, after):
+    """Compare two collapsed status maps.
+
+    f2p        -- FAILURE before, PASSED after. The oracle. Requires an exact
+                  node id match on both sides.
+    p2p        -- PASSED on both. The regression set.
+    broken     -- PASSED before, and after either FAILURE or gone, where the
+                  disappearance is not explained by a rename.
+    renamed    -- PASSED before and gone after, but the same test function
+                  still has at least as many passing cases. Reported, not
+                  penalised.
+    error_base -- could not run before, PASSED after. Not admissible as an
+                  oracle (decision 2), but counted so the cost of that gate
+                  is measurable.
+
+    Why renames are reconciled at all: pydantic parametrises one test on
+    source line numbers, so applying the code patch renumbers the ids without
+    changing behaviour. Treating that as a broken regression rejected three
+    good candidates in the 2025Q3 batch. The reconciliation is deliberately
+    narrow -- it requires the passing count for that test function not to
+    drop -- so it cannot excuse a test that genuinely disappeared.
+    """
+    f2p, p2p, broken, renamed, error_base = [], [], [], [], []
+
+    after_pass_by_base = {}
+    for nodeid, status in after.items():
+        if status == PASSED:
+            key = base_id(nodeid)
+            after_pass_by_base[key] = after_pass_by_base.get(key, 0) + 1
+    before_pass_by_base = {}
+    for nodeid, status in before.items():
+        if status == PASSED:
+            key = base_id(nodeid)
+            before_pass_by_base[key] = before_pass_by_base.get(key, 0) + 1
+
+    for nodeid, was in before.items():
+        now = after.get(nodeid)
+        if was == FAILURE and now == PASSED:
+            f2p.append(nodeid)
+        elif was == ERROR and now == PASSED:
+            error_base.append(nodeid)
+        elif was == PASSED:
+            if now == PASSED:
+                p2p.append(nodeid)
+            elif now == FAILURE:
+                broken.append(nodeid)
+            elif now is None:
+                key = base_id(nodeid)
+                if after_pass_by_base.get(key, 0) >= before_pass_by_base[key]:
+                    renamed.append(nodeid)
+                else:
+                    broken.append(nodeid)
+            else:
+                broken.append(nodeid)
+    return {"f2p": sorted(f2p), "p2p": sorted(p2p), "broken": sorted(broken),
+            "renamed": sorted(renamed), "error_base": sorted(error_base)}
