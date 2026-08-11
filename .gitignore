@@ -19,5 +19,13 @@ Thumbs.db
 # Demo harness and its experiment artifacts (excluded for now)
 demo/
 
-# Local-only tooling: obra/superpowers vendored as a project-scoped skills-dir plugin
+# Local-only tooling vendored as project-scoped skills-dir plugins
+# (claude-octopus* also covers the .disabled rename used by tools\octopus.cmd)
 .claude/skills/superpowers/
+.claude/skills/claude-octopus*/
+
+# Octopus run state and council artifacts
+.claude-octopus/
+
+# Local-only: Codex MCP server wiring (machine-specific binary path via $CODEX_BIN)
+.mcp.json
