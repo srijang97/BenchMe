@@ -13,12 +13,20 @@ def test_split_paths_separates_tests_from_code():
         "pydantic/_internal/_fields.py",
         "tests/benchmarks/test_north_star.py",
         "docs/index.md",
+        "tests/fixtures/expected.json",
+        "conftest.py",
     ]
     tests, code = validate.split_paths(files)
-    assert tests == ["tests/benchmarks/test_north_star.py", "tests/test_main.py"]
+    assert tests == [
+        "conftest.py",
+        "tests/benchmarks/test_north_star.py",
+        "tests/fixtures/expected.json",
+        "tests/test_main.py",
+    ]
     assert code == ["docs/index.md", "pydantic/_internal/_fields.py",
                     "pydantic/main.py"]
     assert not set(tests) & set(code)
+    assert sorted(tests + code) == sorted(files)
 
 
 def test_diff_outcomes_classifies_each_test():
