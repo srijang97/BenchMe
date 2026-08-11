@@ -119,9 +119,9 @@ A broken node id that is ABSENT from the after log did not fail -- it was rename
 
 ## Validated candidates
 
-| sha | subsystem | size | f2p tests | p2p | before_failed | anchored | subject |
-|---|---|---|---|---|---|---|---|
-| `a59dab90` | pydantic/_internal | s | 1 | 5277 | 840 / 6437 | true | Refactor logic to support Pydantic's `Field()` function in d |
+| sha | subsystem | size | f2p tests | reproduced | p2p | before_failed | anchored | subject |
+|---|---|---|---|---|---|---|---|---|
+| `a59dab90` | pydantic/_internal | s | 1 | n/r | 5277 | 840 / 6437 | true | Refactor logic to support Pydantic's `Field()` function in d |
 
 The oracle node ids, so a reviewer can check them:
 

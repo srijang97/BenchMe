@@ -35,7 +35,12 @@ NON_PYTEST_TEST_DIRS = {
 
 
 def is_non_pytest_test(repo_name, path):
-    return any(path.startswith(prefix)
+    # The trailing slash is normalised here rather than trusted in the table
+    # above. An entry written "tests/typechecking" would otherwise also match
+    # "tests/typechecking_extra/", silently dropping real pytest tests from a
+    # candidate's targets -- our defect turning into a verdict about the
+    # commit, which is the one thing this filter must not do.
+    return any(path.startswith(prefix if prefix.endswith("/") else prefix + "/")
                for prefix in NON_PYTEST_TEST_DIRS.get(repo_name, ()))
 
 

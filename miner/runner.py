@@ -395,27 +395,79 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
         # here is either flaky or selection-dependent. Kimi's point in round
         # 2: flakiness, not taxonomy, is the plausible mechanism by which a
         # test "passes for unrelated reasons".
-        reproduced = [t for t in (pass1_f2p or []) if t in set(d["f2p"])]
-        out["f2p_pass1"] = sorted(pass1_f2p or [])
+        #
+        # A pass-2 call carrying no pass-1 oracle is a MINER BUG, not a
+        # property of the commit: validate_quarter only reaches pass 2 through
+        # a `pass1_ok` record, which by construction has a non-empty f2p.
+        # Skipping the check in that case would default a missing value toward
+        # the qualifying outcome, which the project's global constraints forbid
+        # outright. `error`, not apparatus and not rejected:*: it is our bug,
+        # it is a programming error rather than a property of the commit or of
+        # the environment, and `error` is non-terminal so the candidate is
+        # retried once the bug is fixed.
+        if not pass1_f2p:
+            out.update(
+                status="error",
+                reason="miner bug: pass 2 ran with no pass-1 fail->pass set, "
+                       "so the determinism check of decision 7 could not be "
+                       "made; refusing to book a validated record without it")
+            return out
+
+        f2p_now = set(d["f2p"])
+        reproduced = [t for t in pass1_f2p if t in f2p_now]
+        out["f2p_pass1"] = sorted(pass1_f2p)
         out["f2p_reproduced"] = sorted(reproduced)
-        if pass1_f2p and not reproduced:
+
+        # "Measured and did not flip" is not "never measured", and only the
+        # first is a fact about the commit. `--continue-on-collection-errors`
+        # means a collection error ANYWHERE in the full suite can drop a test
+        # from pass 2's results entirely; that node then cannot appear in pass
+        # 2's f2p, and booking `rejected:unstable` would record OUR tooling
+        # failure as a verdict about the commit's tests -- the precise failure
+        # class this redesign exists to eliminate. Absence from pass 2's
+        # before-run status map means the node was never measured, so nothing
+        # can be concluded about it: apparatus, which is ours and terminal.
+        # Checked BEFORE the reproduction check, so a never-measured node can
+        # never fall through into it.
+        never_measured = sorted(t for t in pass1_f2p if t not in before)
+        if never_measured:
+            n_before = len(out.get("before_collect_errors") or [])
+            n_after = len(out.get("after_collect_errors") or [])
+            out.update(
+                status="apparatus",
+                reason=f"{len(never_measured)} of {len(pass1_f2p)} pass-1 "
+                       f"fail->pass test(s) were never measured in pass 2, so "
+                       f"the determinism check cannot be made (first: "
+                       f"{never_measured[0]}); pass-2 collection errors: "
+                       f"{n_before} before, {n_after} after")
+            return out
+
+        if not reproduced:
             out.update(
                 status="rejected:unstable",
-                reason=f"none of {len(pass1_f2p)} pass-1 fail->pass test(s) "
-                       f"reproduced in the full-suite run")
+                reason=f"all {len(pass1_f2p)} pass-1 fail->pass test(s) were "
+                       f"measured in the full-suite pass-2 run and none "
+                       f"reproduced the fail->pass transition")
+            # Pass 2's own raw f2p set is not an oracle here -- nothing in it
+            # reproduced -- and leaving it in place lets a downstream reader
+            # mistake it for one while `f2p_reproduced` is empty. It stays
+            # recoverable from `failure_labels`, whose keys are that set.
+            out["f2p"] = []
             return out
-        if reproduced:
-            # The oracle is the INTERSECTION. A test that only flips in one of
-            # the two runs is not something we are willing to grade an agent
-            # on.
-            out["f2p"] = sorted(reproduced)
-            # failure_labels was built from the pass-2 f2p set a few lines up.
-            # Narrowing the oracle without narrowing the labels would leave
-            # report._composition counting labels for node ids that are not in
-            # the capsule's oracle.
-            out["failure_labels"] = {t: lbl
-                                     for t, lbl in out["failure_labels"].items()
-                                     if t in set(out["f2p"])}
+        # Every pass-1 oracle node was measured and at least one reproduced.
+        # The oracle is the INTERSECTION. A test that only flips in one of the
+        # two runs is not something we are willing to grade an agent on. No
+        # `if reproduced:` guard: the branch above already returned on empty,
+        # and a guard here would read as though an empty intersection could
+        # still reach `validated`.
+        out["f2p"] = sorted(reproduced)
+        # failure_labels was built from the pass-2 f2p set a few lines up.
+        # Narrowing the oracle without narrowing the labels would leave
+        # report._composition counting labels for node ids that are not in
+        # the capsule's oracle.
+        out["failure_labels"] = {t: lbl
+                                 for t, lbl in out["failure_labels"].items()
+                                 if t in set(out["f2p"])}
 
     if pass2 and d["broken"]:
         out.update(status="rejected:regression_broken",

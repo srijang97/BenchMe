@@ -124,6 +124,21 @@ def _fmt_bf(rec):
     return str(bf)
 
 
+def _fmt_repro(rec):
+    """How much of pass 1's oracle reproduced in pass 2, for a table cell.
+
+    Decision 7's determinism check is otherwise invisible in this report: a
+    validated capsule looks the same whether its oracle survived an
+    independent rerun or was never checked. Both fields are read with
+    `.get`, so pre-redesign records -- written before the check existed --
+    render "n/r" rather than claiming a ratio nobody measured.
+    """
+    pass1 = rec.get("f2p_pass1") or []
+    if not pass1:
+        return "n/r"
+    return f"{len(rec.get('f2p_reproduced') or [])} / {len(pass1)}"
+
+
 def _funnel(out, cands, done):
     validated = [d for d in done if d["status"] == "validated"]
     apparatus = [d for d in done if d["status"] == "apparatus"]
@@ -395,12 +410,13 @@ def _validated(out, validated):
         out.append("None yet.")
         out.append("")
         return
-    out += ["| sha | subsystem | size | f2p tests | p2p | before_failed | "
-            "anchored | subject |",
-            "|---|---|---|---|---|---|---|---|"]
+    out += ["| sha | subsystem | size | f2p tests | reproduced | p2p | "
+            "before_failed | anchored | subject |",
+            "|---|---|---|---|---|---|---|---|---|"]
     for d in validated:
         out.append(f"| `{d['sha'][:8]}` | {d['subsystem']} | "
                    f"{d['size_bucket']} | {len(d.get('f2p', []))} | "
+                   f"{_fmt_repro(d)} | "
                    f"{d.get('p2p_count', '-')} | {_fmt_bf(d)} | "
                    f"{str(d.get('anchored')).lower()} | "
                    f"{d['subject'][:60]} |")
