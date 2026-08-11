@@ -631,6 +631,43 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
                                if v == outcomes.FAILURE)
     out["before_collect_errors"] = [r.nodeid for r in before_collect]
 
+    # PASS 1 ONLY. In pass 1 the pytest targets ARE this candidate's own
+    # touched test files, so a before-side collection error means one of THOSE
+    # files failed to import. Under `--continue-on-collection-errors` its tests
+    # are not run and not reported -- they simply do not exist in `before`. The
+    # oracle can therefore be absent through no fault of the commit, d["f2p"]
+    # comes back empty and the candidate books `rejected:unchanged`: OUR
+    # dependency or environment gap recorded as a terminal verdict about the
+    # commit. Apparatus is the honest answer -- ours, and durable, since the
+    # same image will fail the same import again.
+    #
+    # Placed after `before_collect_errors` is recorded, so the diagnostic
+    # survives on the record, and before the code patch is applied, so a
+    # candidate that is already dead does not pay for a second pytest run.
+    #
+    # NOT applied to pass 2, deliberately. Pass 2 runs the FULL suite, where
+    # collection errors from dependency drift in an anchored image are endemic
+    # and have nothing to do with the candidate (measured on 2025Q3); a blanket
+    # rule there would terminally retire nearly every candidate. The correct
+    # pass-2 predicate is narrower -- intersect the collection-error node ids
+    # with the candidate's OWN target paths, so only an error in a file this
+    # candidate depends on counts -- and it is deliberately left as follow-up
+    # work rather than guessed at now. Pass 2 is not unguarded in the meantime:
+    # `new_collect` below still catches errors NEW to the after side, and
+    # check_pass2_determinism still books apparatus for any oracle node the
+    # full-suite run did not measure, which is the shape a collection error
+    # takes there.
+    if not pass2 and before_collect:
+        first = before_collect[0].nodeid
+        out.update(
+            status="apparatus",
+            reason=f"{len(before_collect)} of this candidate's own touched "
+                   f"test file(s) failed to collect on the before side, so "
+                   f"their tests never ran and the oracle cannot be trusted "
+                   f"to be absent for any reason but ours (first: "
+                   f"{first})"[:300])
+        return out
+
     # Checked HERE, before the code patch and the second pytest invocation. A
     # candidate with no before-side outcomes is already dead; running the full
     # after pass to reach the same conclusion just buys a second full pytest

@@ -132,23 +132,43 @@ def collapse(records):
 
       1. a FAILED setup or teardown makes the whole test an ERROR. It never
          asserted, or it did not leave the process clean for the next test.
-      2. a SKIPPED outcome in ANY phase makes the test SKIPPED. `@pytest.mark.
-         skip`, `@pytest.mark.skipif` and a fixture calling `pytest.skip()` all
-         report at `when="setup"` and emit no call record at all, so a
-         call-only rule left the node ABSENT from this map rather than
-         SKIPPED. Absence and skip are treated very differently downstream: a
-         previously-passing test that a code patch newly skips would vanish,
-         fail outcomes.diff's exact-swap rename rule, land in `broken`, and
-         book a false `rejected:regression_broken` -- our reading of the run
-         turned into a verdict about the commit. In practice `skipped_after`
-         could only ever fire for an in-body `pytest.skip()` before this.
-      3. otherwise the call phase decides.
+      2. a SKIPPED outcome in any phase makes the test SKIPPED, BUT ONLY WHILE
+         THE CALL PHASE HAS NOT ALREADY SPOKEN. `@pytest.mark.skip`,
+         `@pytest.mark.skipif` and a fixture calling `pytest.skip()` all report
+         at `when="setup"` and emit no call record at all, so a call-only rule
+         left the node ABSENT from this map rather than SKIPPED. Absence and
+         skip are treated very differently downstream: a previously-passing
+         test that a code patch newly skips would vanish, fail outcomes.diff's
+         exact-swap rename rule, land in `broken`, and book a false
+         `rejected:regression_broken` -- our reading of the run turned into a
+         verdict about the commit.
+
+         The `not already spoken` half is the other side of the same
+         discipline. A node whose CALL phase genuinely FAILED and whose
+         TEARDOWN then reports skipped is a real base negative: it ran, and its
+         expectation was not met. An any-phase rule marked it SKIPPED, dropped
+         it out of the oracle, and pushed the candidate to
+         `rejected:unchanged` -- again our reading producing a verdict. So a
+         skip may not overwrite a FAILURE or a PASSED that came from `call`,
+         and (rule 1's guard) may not overwrite an ERROR either. A skip
+         arriving with no call result yet still wins, which is the marker case
+         above.
+      3. otherwise the call phase decides, and it may overwrite an earlier
+         skip. pytest never emits a call record after a setup skip -- the
+         setup skip aborts the item -- so this ordering cannot arise in
+         practice; the rule is DEFENSIVE, and it resolves toward the phase that
+         proves the body executed.
 
     Ordering matters and is pinned by tests: a failed setup still outranks a
-    skip (rule 1 is checked first, and the ERROR guard below stops a later
-    skip record overwriting it), and a skip outranks a passing teardown.
+    skip in either arrival order (rule 1 is checked first, and the ERROR guard
+    below stops a later skip record overwriting it), and a skip still outranks
+    a passing teardown.
     """
     status = {}
+    # Node ids whose `call` phase produced a result. Tracked separately from
+    # `status` because FAILURE/PASSED are also reachable from a skip-free path
+    # and the skip rule has to know the PHASE, not just the value.
+    from_call = set()
     for rec in records:
         if rec.outcome == "failed" and rec.when in _STRUCTURAL_PHASES:
             status[rec.nodeid] = ERROR
@@ -156,10 +176,15 @@ def collapse(records):
         if status.get(rec.nodeid) == ERROR:
             continue
         if rec.outcome == "skipped":
-            status[rec.nodeid] = SKIPPED
+            # A call-phase skip (an in-body `pytest.skip()`) lands here too and
+            # is not recorded in `from_call`: nothing asserted, so it is a skip
+            # and not a call result.
+            if rec.nodeid not in from_call:
+                status[rec.nodeid] = SKIPPED
             continue
         if rec.when != "call":
             continue
+        from_call.add(rec.nodeid)
         if rec.outcome == "failed":
             status[rec.nodeid] = FAILURE
         else:

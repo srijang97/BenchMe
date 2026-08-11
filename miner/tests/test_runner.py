@@ -268,6 +268,68 @@ def test_a_skipped_oracle_node_reaches_the_record_as_apparatus(monkeypatch):
     assert "skipped" in rec["reason"]
 
 
+def test_pass1_before_collection_error_is_apparatus_not_unchanged(monkeypatch):
+    # In PASS 1 the pytest targets are the candidate's OWN touched test files,
+    # so a before-side collection error means one of those files failed to
+    # import. Under --continue-on-collection-errors its tests silently do not
+    # run, the oracle is absent, and the candidate used to book
+    # `rejected:unchanged` -- our dependency gap recorded as a terminal verdict
+    # about the commit.
+    rec = _measure(monkeypatch,
+                   before={A: outcomes.FAILURE},
+                   after={A: outcomes.FAILURE},
+                   pass1_f2p=None, pass2=False,
+                   before_collect=["tests/test_a.py", "tests/test_b.py"])
+    assert rec["status"] == "apparatus"
+    assert "2 of this candidate's own touched test file(s)" in rec["reason"]
+    assert "tests/test_a.py" in rec["reason"]
+    # The diagnostic survives on the record: the check sits after
+    # before_collect_errors is recorded.
+    assert rec["before_collect_errors"] == ["tests/test_a.py",
+                                            "tests/test_b.py"]
+
+
+def test_pass1_collection_error_returns_before_the_after_run(monkeypatch):
+    # A dead candidate must not pay for a second pytest run: the check sits
+    # before the code patch is applied, so no after-side measurement exists.
+    rec = _measure(monkeypatch,
+                   before={A: outcomes.FAILURE},
+                   after={A: outcomes.PASSED},
+                   pass1_f2p=None, pass2=False,
+                   before_collect=["tests/test_a.py"])
+    assert rec["status"] == "apparatus"
+    assert "after_collect_errors" not in rec
+    assert "f2p" not in rec
+
+
+def test_pass1_with_no_collection_errors_is_untouched(monkeypatch):
+    rec = _measure(monkeypatch,
+                   before={A: outcomes.FAILURE},
+                   after={A: outcomes.PASSED},
+                   pass1_f2p=None, pass2=False,
+                   messages={A: "AssertionError: boom"})
+    assert rec["status"] == "pass1_ok"
+    assert rec["before_collect_errors"] == []
+
+
+def test_pass2_before_collection_errors_do_not_book_apparatus(monkeypatch):
+    # DELIBERATELY NOT pass 2. The full suite in an anchored image carries
+    # endemic collection errors from dependency drift that have nothing to do
+    # with the candidate; a blanket rule there would terminally retire nearly
+    # every candidate. Pass 2 still has its own guards -- `new_collect` for
+    # errors new to the after side, and the determinism check for oracle nodes
+    # the run did not measure.
+    rec = _measure(monkeypatch,
+                   before={A: outcomes.FAILURE},
+                   after={A: outcomes.PASSED},
+                   pass1_f2p=[A],
+                   messages={A: "AssertionError: boom"},
+                   before_collect=["tests/unrelated.py"],
+                   after_collect=["tests/unrelated.py"])
+    assert rec["status"] == "validated"
+    assert rec["f2p"] == [A]
+
+
 def test_an_unrecognised_check_kind_cannot_reach_validated(monkeypatch):
     # Pass2Check.kind is closed: PASS2_REPRODUCED is the only kind allowed to
     # continue, and it is asserted rather than fallen into. A fifth kind added

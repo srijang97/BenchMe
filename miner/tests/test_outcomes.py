@@ -199,6 +199,80 @@ def test_collapse_a_teardown_skip_does_not_hide_a_failed_teardown():
     assert outcomes.collapse(recs) == {"t.py::a": outcomes.ERROR}
 
 
+def test_collapse_a_teardown_skip_does_not_erase_a_failed_call():
+    # THE narrowing. The any-phase skip rule went one step too far: a node
+    # whose call phase genuinely FAILED and whose teardown then reports skipped
+    # was marked SKIPPED, which drops a real base negative out of the oracle
+    # and pushes the candidate to `rejected:unchanged` -- our reading of the
+    # run turned into a verdict about the commit.
+    recs = [outcomes.Record("t.py::a", "call", "failed", "assert 1 == 2"),
+            outcomes.Record("t.py::a", "teardown", "skipped", "Skipped: x")]
+    assert outcomes.collapse(recs) == {"t.py::a": outcomes.FAILURE}
+
+
+def test_collapse_a_teardown_skip_does_not_erase_a_passing_call():
+    # Same rule from the other side. A PASSED that came from `call` is a
+    # measurement too: it is the regression set's raw material, and losing it
+    # to a teardown skip shrinks p2p for no reason the commit caused.
+    recs = [outcomes.Record("t.py::a", "call", "passed", None),
+            outcomes.Record("t.py::a", "teardown", "skipped", "Skipped: x")]
+    assert outcomes.collapse(recs) == {"t.py::a": outcomes.PASSED}
+
+
+def test_collapse_a_setup_skip_alone_is_still_skipped():
+    # The narrowing must not undo the fix it narrows. With no call result the
+    # skip still wins -- otherwise a marker skip goes back to being ABSENT.
+    recs = [outcomes.Record("t.py::a", "setup", "skipped", "Skipped: gated")]
+    assert outcomes.collapse(recs) == {"t.py::a": outcomes.SKIPPED}
+
+
+def test_collapse_a_call_record_after_a_setup_skip_wins():
+    # DEFENSIVE, and documented as such in collapse's docstring: pytest never
+    # emits a call record after a setup skip, because the setup skip aborts the
+    # item. Pinned anyway so the chosen resolution is explicit rather than an
+    # accident of loop order -- the call phase proves the body executed, so it
+    # is the better evidence and it overwrites the skip.
+    recs = [outcomes.Record("t.py::a", "setup", "skipped", "Skipped: gated"),
+            outcomes.Record("t.py::a", "call", "failed", "assert 1 == 2")]
+    assert outcomes.collapse(recs) == {"t.py::a": outcomes.FAILURE}
+    recs = [outcomes.Record("t.py::a", "setup", "skipped", "Skipped: gated"),
+            outcomes.Record("t.py::a", "call", "passed", None)]
+    assert outcomes.collapse(recs) == {"t.py::a": outcomes.PASSED}
+
+
+def test_collapse_a_failed_setup_beats_a_skip_in_either_order_still():
+    # Rule 1 is untouched by the narrowing: a fixture that blew up means the
+    # test never asserted, whichever order the records arrive in and whichever
+    # phase the skip is reported at.
+    boom = outcomes.Record("t.py::a", "setup", "failed", "RuntimeError: boom")
+    for skip in (outcomes.Record("t.py::a", "teardown", "skipped", "Skipped: x"),
+                 outcomes.Record("t.py::a", "setup", "skipped", "Skipped: x")):
+        assert outcomes.collapse([boom, skip]) == {"t.py::a": outcomes.ERROR}
+        assert outcomes.collapse([skip, boom]) == {"t.py::a": outcomes.ERROR}
+
+
+def test_collapse_an_in_body_call_skip_is_still_skipped():
+    # A call-phase `skipped` is not a call RESULT: nothing asserted. It must
+    # not be treated as "the call phase has spoken", or a later teardown skip
+    # would be the only thing keeping it out of the map.
+    recs = [outcomes.Record("t.py::a", "call", "skipped", "Skipped: no net"),
+            outcomes.Record("t.py::a", "teardown", "skipped", "Skipped: no net")]
+    assert outcomes.collapse(recs) == {"t.py::a": outcomes.SKIPPED}
+
+
+def test_diff_keeps_a_call_failure_with_a_teardown_skip_as_an_oracle():
+    # End to end for the defect above. The before side failed in `call` and
+    # skipped in teardown; the after side passes. That is a fail->pass oracle,
+    # not a vanished skip.
+    before = outcomes.collapse(
+        [outcomes.Record("t.py::a", "call", "failed", "assert 1 == 2"),
+         outcomes.Record("t.py::a", "teardown", "skipped", "Skipped: x")])
+    after = outcomes.collapse(
+        [outcomes.Record("t.py::a", "call", "passed", None)])
+    d = outcomes.diff(before, after)
+    assert d["f2p"] == ["t.py::a"]
+
+
 def test_diff_routes_a_marker_skip_added_by_the_patch_to_skipped_after():
     # End to end for the defect above: the before side ran the test, the code
     # patch added a skipif, and the after side reports only a setup skip. That
