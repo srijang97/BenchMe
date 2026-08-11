@@ -46,3 +46,23 @@ def test_diff_outcomes_classifies_each_test():
     assert result["f2p"] == ["tests/test_a.py::test_new"]
     assert result["p2p"] == ["tests/test_a.py::test_old"]
     assert result["broken"] == ["tests/test_a.py::test_breaks"]
+
+
+SAMPLE = """
+=========================== short test summary info ============================
+FAILED test_sample.py::test_assertion - assert 1 == 2
+FAILED test_sample.py::test_missing_attr - AttributeError: module 'json' has no attribute 'this_does_not_exist'
+FAILED test_sample.py::test_missing_import - ModuleNotFoundError: No module named 'a_module_that_does_not_exist'
+"""
+
+
+def test_parse_and_classify_failures():
+    parsed = validate.parse_failures(SAMPLE)
+    assert validate.classify(parsed["test_sample.py::test_missing_attr"]) \
+        == "missing_api"
+    assert validate.classify(parsed["test_sample.py::test_missing_import"]) \
+        == "missing_api"
+    assert validate.classify(parsed["test_sample.py::test_assertion"]) \
+        == "assertion"
+    assert validate.classify("SyntaxError") == "structural"
+    assert validate.classify("ValueError") == "other:ValueError"

@@ -3,6 +3,7 @@ file in the miner with unit tests. Each function here fails SILENTLY if wrong:
 a bad patch split hands the agent the answer or strips the fix; a bad outcome
 diff records the wrong tests as the oracle.
 """
+import re
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
@@ -110,3 +111,50 @@ def diff_outcomes(before, after):
         elif before_outcome == "PASSED" and after_outcome in ("FAILED", None):
             broken.append(nodeid)
     return {"f2p": sorted(f2p), "p2p": sorted(p2p), "broken": sorted(broken)}
+
+
+# pytest's short summary line, e.g.
+#   FAILED tests/test_x.py::test_y - AttributeError: no attribute 'z'
+#   FAILED tests/test_x.py::test_y - assert 1 == 2
+# Node ids can contain spaces inside parametrised brackets, so the node id is
+# matched non-greedily up to the " - " separator rather than as \S+. The
+# screener learned this the hard way: a \S+ node-id pattern silently dropped
+# 1,604 of 1,977 tests.
+FAILED_LINE = re.compile(r"^FAILED (?P<nodeid>.+?) - (?P<detail>.*)$", re.M)
+EXC_NAME = re.compile(r"^(?P<exc>[A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception|Exit))\b")
+
+MISSING_API = {"AttributeError", "ImportError", "ModuleNotFoundError",
+               "NameError"}
+STRUCTURAL = {"SyntaxError", "IndentationError", "TabError",
+              "CollectionError", "Collection"}
+FAILURE_CLASSES = {"assertion", "missing_api", "structural"}
+
+
+def parse_failures(stdout):
+    """node id -> exception type name, from pytest's short summary.
+
+    A bare `assert` prints no exception name at all, so it is mapped to
+    AssertionError explicitly rather than falling through to `other:`.
+    """
+    out = {}
+    for m in FAILED_LINE.finditer(stdout):
+        detail = m.group("detail").strip()
+        exc = EXC_NAME.match(detail)
+        out[m.group("nodeid").strip()] = exc.group("exc") if exc else "AssertionError"
+    return out
+
+
+def classify(exc_name):
+    """Per the council contract: only assertion failures qualify as a valid
+    base negative. missing_api and structural are rejected -- but counted by
+    class, because the assertion-only rule filters out feature work (a new
+    feature's test fails at the parent with AttributeError) and we need to
+    know what that costs in yield before assuming the rule was right.
+    """
+    if exc_name == "AssertionError":
+        return "assertion"
+    if exc_name in MISSING_API:
+        return "missing_api"
+    if exc_name in STRUCTURAL:
+        return "structural"
+    return f"other:{exc_name}"
