@@ -1,7 +1,7 @@
 """Candidate records and the append-only JSONL store.
 
 A record is keyed by the candidate commit sha. Statuses:
-  validated          fail-to-pass established, assertion-class, regressions clean
+  validated          fail-to-pass established and reproduced, regressions clean
   rejected:<reason>  a real verdict about the commit
   apparatus          our fault (OOM, build failure, patch would not apply)
   error              miner bug; traceback recorded, sweep continues

@@ -20,6 +20,24 @@ import record  # noqa: E402
 REVERT_SUBJECT = re.compile(r'^Revert "(?P<orig>.+)"')
 SIZE_BUCKETS = ((2, "xs"), (4, "s"), (7, "m"))  # else "l"
 
+# Paths that satisfy metrics.is_test_file but are not pytest tests, so
+# pointing pytest at them collects nothing and the candidate books as
+# apparatus. Deliberately explicit per-repo config rather than a heuristic:
+# a heuristic that guessed wrong would silently drop real tests, and the
+# whole point of this redesign is that our defects must not become verdicts.
+#
+# pydantic/tests/typechecking: static type-checker fixtures, asserted by mypy
+# and pyright, never executed by pytest. Eight of ten apparatus cases in the
+# first 2025Q3 batch.
+NON_PYTEST_TEST_DIRS = {
+    "pydantic": ("tests/typechecking/",),
+}
+
+
+def is_non_pytest_test(repo_name, path):
+    return any(path.startswith(prefix)
+               for prefix in NON_PYTEST_TEST_DIRS.get(repo_name, ()))
+
 
 def quarter_of(iso_date):
     year = int(iso_date[0:4])

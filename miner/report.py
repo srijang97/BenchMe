@@ -1,6 +1,5 @@
-"""Funnel report. Every rejection appears with its class -- especially
-missing_api, which is the number that tells us what the assertion-only rule
-actually cost in yield.
+"""Funnel report. Every rejection appears with its class, and the label mix
+across validated oracles is printed on every run.
 
 Three properties of this renderer are load-bearing and must survive any edit:
 
@@ -12,11 +11,11 @@ Three properties of this renderer are load-bearing and must survive any edit:
    attempted-denominator figure is printed beside it and explicitly labelled
    as NOT the conversion rate, so nobody can quote it as one.
 
-2. Every rejection class is printed, and `missing_api` is printed even when it
-   is zero. A zero is a measurement; an absent row looks like an oversight.
-   The assertion-only rule filters out feature work, and the size of that cost
-   is a finding for the decision council -- never a reason to loosen
-   `validate.classify`.
+2. Oracle composition and the apparatus rate are emitted unconditionally, even
+   when empty. A zero is a measurement; an absent section looks like an
+   oversight and is one nobody notices is missing. Round 2 retired failure kind
+   as a gate on the understanding that composition becomes a REPORTED property,
+   so `outcomes.label`'s output is described here and gates nothing.
 
 3. `before_failed` is surfaced per candidate. The quarter image pins the
    quarter's LAST lockfile, so a mid-quarter candidate runs against slightly
@@ -188,61 +187,79 @@ def _verdicts(out, done):
     out.append("")
 
 
-def _rejections(out, rejected, done):
-    """Rejection classes, plus the base-negative classes behind them.
+APPARATUS_TRIPWIRE = 10.0
 
-    `missing_api` is emitted at both levels even when zero: the whole point of
-    the number is to price the assertion-only rule, and a missing row cannot be
-    told apart from an unmeasured one.
+
+def _composition(out, done):
+    """Label mix across validated oracles, plus the apparatus tripwire.
+
+    Emitted unconditionally, including when it is empty. Round 2 retired
+    failure kind as a gate on the understanding that composition becomes a
+    REPORTED property -- the chair's answer to the objection that labels only
+    protect the corpus if someone actually looks at them. A section that
+    disappears when it has nothing to say is a section nobody notices is
+    missing.
+    """
+    labels = Counter()
+    for rec in done:
+        if rec.get("status") == "validated":
+            labels.update((rec.get("failure_labels") or {}).values())
+    total = sum(labels.values())
+
+    out += ["## Oracle composition", "",
+            "How the fail-to-pass tests failed, across validated capsules. "
+            "Descriptive only -- no label gates admission "
+            "(`docs/council/ROUND_02_SYNTHESIS.md`).", ""]
+    if not total:
+        out += ["_No validated capsules yet._", ""]
+    else:
+        out += ["| label | count | share |", "|---|---|---|"]
+        for lbl, n in labels.most_common():
+            out.append(f"| `{lbl}` | {n} | {100.0 * n / total:.1f}% |")
+        out.append("")
+
+    adjudicated = [r for r in done if r.get("status") != "error"]
+    if adjudicated:
+        apparatus = [r for r in adjudicated if r.get("status") == "apparatus"]
+        rate = 100.0 * len(apparatus) / len(adjudicated)
+        out += [f"Apparatus: {len(apparatus)}/{len(adjudicated)} adjudicated "
+                f"candidates ({rate:.1f}%).", ""]
+        # Decision 13. The first 2025Q3 batch ran at 48%: mining on would have
+        # spent candidates on our own defects and called the result a yield.
+        if rate > APPARATUS_TRIPWIRE:
+            out += [f"> **TRIPWIRE** apparatus is {rate:.1f}%, above the "
+                    f"{APPARATUS_TRIPWIRE:.0f}% threshold. Stop mining and fix "
+                    f"tooling before spending more of the corpus.", ""]
+
+
+def _rejections(out, rejected):
+    """Rejection classes, each emitted even when zero.
+
+    The three live classes are printed at zero on purpose: a zero is a
+    measurement, and a missing row cannot be told apart from an unmeasured one.
+
+    The base-negative-class breakdown that used to follow this table is gone.
+    It counted `missing_api` and friends to price the assertion-only rule;
+    round 2 retired that rule (`docs/council/ROUND_02_SYNTHESIS.md`), so those
+    rows now price nothing and would show a permanent zero that reads like
+    evidence. How the oracle tests failed is still reported -- descriptively,
+    and over validated capsules only -- by `_composition`.
     """
     out += ["## Rejections by class", ""]
     counts = Counter(d["status"].split("rejected:", 1)[1] for d in rejected)
-    for name in ("missing_api", "structural", "assertion", "unchanged",
-                 "regression_broken"):
+    for name in ("unchanged", "regression_broken", "unstable"):
         counts.setdefault(name, 0)
     out += ["| rejection class | count | what it means |", "|---|---|---|"]
     meanings = {
         "unchanged": "no test went fail->pass (see the `before_failed` caveat)",
-        "missing_api": "**base negative was AttributeError/ImportError/"
-                       "NameError/ModuleNotFoundError -- feature work, "
-                       "excluded by the assertion-only rule**",
-        "structural": "base negative was a syntax or collection error",
         "regression_broken": "code patch broke previously-passing tests",
-        "assertion": "should be impossible -- an assertion base negative "
-                     "qualifies",
+        "unstable": "pass 1's fail->pass set did not reproduce in the "
+                    "full-suite pass-2 run -- flaky or selection-dependent",
     }
     for name, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
-        why = meanings.get(name, "unrecognised exception identity; see "
-                                 "`validate.classify`'s `other:` fallthrough")
+        why = meanings.get(name, "no longer produced; a class from the "
+                                 "retired base-negative classifier")
         out.append(f"| `{name}` | {n} | {why} |")
-    out.append("")
-    out.append(f"**`missing_api` rejections: {counts['missing_api']}.** This "
-               f"is the price of the council's assertion-only rule, measured "
-               f"rather than assumed. A large number here is a finding to "
-               f"take back to the council; it is never a reason to loosen "
-               f"`validate.classify`.")
-    out.append("")
-
-    # The per-status class above is the DOMINANT class of the rejection. The
-    # tally below is over every f2p node id the miner ever classified, which is
-    # the number that actually prices the rule -- a candidate can carry a
-    # missing_api base negative and still be rejected for another reason, or be
-    # validated because one of its node ids was an assertion.
-    tally = Counter()
-    for d in done:
-        for cls in (d.get("failure_classes") or {}).values():
-            tally[cls] += 1
-    out += ["### Base-negative classes over every classified f2p node id", ""]
-    if not tally:
-        out.append("No candidate reached classification.")
-        out.append("")
-        return
-    tally.setdefault("missing_api", 0)
-    total = sum(tally.values())
-    out += ["| class | node ids | share |", "|---|---|---|"]
-    for cls, n in sorted(tally.items(), key=lambda kv: (-kv[1], kv[0])):
-        share = f"{100 * n / total:.0f}%" if total else "-"
-        out.append(f"| `{cls}` | {n} | {share} |")
     out.append("")
 
 
@@ -318,14 +335,22 @@ def _regressions(out, done):
     """Split each `rejected:regression_broken` into real failures and vanished
     node ids.
 
-    `validate.diff_outcomes` books a node id that PASSED before and is ABSENT
-    after as broken, on the reasoning that a collection crash makes a test
-    vanish rather than fail. That reasoning is sound but the rule also catches
-    a node id that was merely RENAMED: pydantic's
+    `outcomes.diff` books a node id that PASSED before and is ABSENT after as
+    `renamed` when the exact-swap rule holds -- within that test function, the
+    after side gained exactly as many newly-passing ids as it lost, so the
+    disappearance reconciles as a renumbering -- and as `broken` otherwise, on
+    the reasoning that a collection crash makes a test vanish rather than
+    fail. It is no longer unconditionally booked as broken.
+    The rename case is real: pydantic's
     `test_docs.py::test_docstrings_examples` parametrises on the source line
     range of each docstring example, so any code patch that shifts lines in a
     documented module renames every id below it. The old id disappears, the new
-    one passes, and a clean candidate is booked as a regression.
+    one passes, and under the old rule a clean candidate was booked as a
+    regression.
+
+    The exact-swap rule is a heuristic, so this audit stays: a `broken` set
+    that is entirely absent from the after log is a rename the rule did not
+    catch.
 
     This section does not change any verdict. It reports, per record, how many
     broken ids were genuinely present-and-failing in the after log versus
@@ -384,9 +409,9 @@ def _validated(out, validated):
     out.append("")
     for d in validated:
         for node in d.get("f2p", []):
-            cls = (d.get("failure_classes") or {}).get(node, "?")
-            out.append(f"- `{d['sha'][:8]}` `{node}` -> base negative "
-                       f"classified `{cls}`")
+            label = (d.get("failure_labels") or {}).get(node, "?")
+            out.append(f"- `{d['sha'][:8]}` `{node}` -> failed as "
+                       f"`{label}` before the fix")
     out.append("")
 
 
@@ -407,7 +432,8 @@ def render():
     out = ["# Miner funnel - stages 0-2", ""]
     validated, apparatus, errors, rejected = _funnel(out, cands, done)
     _verdicts(out, done)
-    _rejections(out, rejected, done)
+    _composition(out, done)
+    _rejections(out, rejected)
     _apparatus(out, apparatus, errors)
     _drift(out, done)
     _regressions(out, done)

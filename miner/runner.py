@@ -2,7 +2,11 @@
 
 Pass 1 runs only the test files the commit touched -- cheap, and it eliminates
 most candidates. Pass 2 runs the full suite on survivors only, to establish the
-pass-to-pass set and catch a code patch that breaks something elsewhere.
+pass-to-pass set, catch a code patch that breaks something elsewhere, and --
+because it is a fresh clone, a fresh patch application and a different
+selection -- serve as the independent rerun that pass 1's fail-to-pass set has
+to reproduce (decision 7). The oracle is the intersection of the two runs; a
+transition that does not reproduce is `rejected:unstable`.
 
 Both passes run inside ONE long-lived container for the quarter, torn down in a
 `finally` no matter how a candidate ends.
@@ -33,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "screener"))
 import metrics  # noqa: E402
 import tierb  # noqa: E402
 
+import candidates  # noqa: E402
 import outcomes  # noqa: E402
 import quarters  # noqa: E402
 import record  # noqa: E402
@@ -194,8 +199,11 @@ def _runnable_targets(container, workdir, tests):
     what to hand pytest: a JSON fixture or a conftest as the only target
     collects nothing, pytest exits with no outcomes, and a perfectly good
     candidate is booked as apparatus. Same for a test file the commit DELETES
-    -- it is gone once the test patch applies. Filtering here keeps both cases
-    out of the apparatus column.
+    -- it is gone once the test patch applies, and for a path under
+    candidates.NON_PYTEST_TEST_DIRS, which looks like a test file to
+    metrics.is_test_file but is a static type-checker fixture pytest collects
+    nothing from. Filtering here keeps all of those out of the apparatus
+    column.
 
     Returns (targets, err). `err` is not None when the PROBE ITSELF failed:
     an unchecked probe returns an empty set on failure, which is
@@ -207,7 +215,8 @@ def _runnable_targets(container, workdir, tests):
     """
     wanted = [t for t in tests
               if metrics.is_test_file(t)
-              and PurePosixPath(t).name != "conftest.py"]
+              and PurePosixPath(t).name != "conftest.py"
+              and not candidates.is_non_pytest_test(record.REPO.name, t)]
     if not wanted:
         return [], None
     script = ("cd {wd} || exit 3; "
@@ -221,7 +230,7 @@ def _runnable_targets(container, workdir, tests):
     return [t for t in wanted if t in present], None
 
 
-def validate_one(container, cand, repo, anchored, pass2=False):
+def validate_one(container, cand, repo, anchored, pass2=False, pass1_f2p=None):
     """Returns a record dict. Never raises for a candidate-level problem.
 
     Raises ContainerLost when the container itself is gone; that is a run-level
@@ -241,7 +250,8 @@ def validate_one(container, cand, repo, anchored, pass2=False):
     out["before_failed"] = None
     lost = False
     try:
-        return _measure(container, cand, repo, out, workdir, pass2)
+        return _measure(container, cand, repo, out, workdir, pass2,
+                        pass1_f2p=pass1_f2p)
     except ContainerLost:
         # The container is about to be destroyed by validate_quarter; an exec
         # against it would at best waste the timeout.
@@ -254,7 +264,7 @@ def validate_one(container, cand, repo, anchored, pass2=False):
             quarters.exec_in(container, ["rm", "-rf", workdir], timeout=300)
 
 
-def _measure(container, cand, repo, out, workdir, pass2):
+def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
     """The body of validate_one, minus the workdir lifetime."""
     sha, parent = cand["sha"], cand["parent"]
     logs = record.LOGS / sha[:12]
@@ -378,6 +388,35 @@ def _measure(container, cand, repo, out, workdir, pass2):
     out["failure_labels"] = {t: outcomes.label(messages.get(t))
                              for t in d["f2p"]}
 
+    if pass2:
+        # Decision 7: the transition must reproduce. Pass 2 is an independent
+        # measurement -- fresh clone, fresh patch, full-suite selection rather
+        # than the touched files -- so an f2p that appears in pass 1 and not
+        # here is either flaky or selection-dependent. Kimi's point in round
+        # 2: flakiness, not taxonomy, is the plausible mechanism by which a
+        # test "passes for unrelated reasons".
+        reproduced = [t for t in (pass1_f2p or []) if t in set(d["f2p"])]
+        out["f2p_pass1"] = sorted(pass1_f2p or [])
+        out["f2p_reproduced"] = sorted(reproduced)
+        if pass1_f2p and not reproduced:
+            out.update(
+                status="rejected:unstable",
+                reason=f"none of {len(pass1_f2p)} pass-1 fail->pass test(s) "
+                       f"reproduced in the full-suite run")
+            return out
+        if reproduced:
+            # The oracle is the INTERSECTION. A test that only flips in one of
+            # the two runs is not something we are willing to grade an agent
+            # on.
+            out["f2p"] = sorted(reproduced)
+            # failure_labels was built from the pass-2 f2p set a few lines up.
+            # Narrowing the oracle without narrowing the labels would leave
+            # report._composition counting labels for node ids that are not in
+            # the capsule's oracle.
+            out["failure_labels"] = {t: lbl
+                                     for t, lbl in out["failure_labels"].items()
+                                     if t in set(out["f2p"])}
+
     if pass2 and d["broken"]:
         out.update(status="rejected:regression_broken",
                    reason=f"{len(d['broken'])} previously-passing tests fail "
@@ -444,7 +483,7 @@ def validate_quarter(quarter, limit, keep_images, force):
             counts[rec["status"]] = counts.get(rec["status"], 0) + 1
             print(f"  {rec['sha'][:8]} {rec['status']} {rec.get('reason') or ''}")
 
-        def attempt(cand, pass2):
+        def attempt(cand, pass2, pass1_f2p=None):
             """Run one candidate; convert an unexpected raise into `error`.
 
             A miner bug is not a verdict about the commit either -- `error` is
@@ -453,7 +492,7 @@ def validate_quarter(quarter, limit, keep_images, force):
             """
             try:
                 return validate_one(cid, cand, record.REPO, img.anchored,
-                                    pass2=pass2)
+                                    pass2=pass2, pass1_f2p=pass1_f2p)
             except ContainerLost:
                 raise
             except Exception:
@@ -465,11 +504,11 @@ def validate_quarter(quarter, limit, keep_images, force):
             for cand in queue:
                 rec = attempt(cand, pass2=False)
                 if rec["status"] == "pass1_ok":
-                    survivors.append(cand)
+                    survivors.append((cand, rec["f2p"]))
                 else:
                     write(rec)
-            for cand in survivors:
-                write(attempt(cand, pass2=True))
+            for cand, pass1_f2p in survivors:
+                write(attempt(cand, pass2=True, pass1_f2p=pass1_f2p))
         except ContainerLost as exc:
             # `error`, not `apparatus`. Both are our fault, but apparatus is
             # TERMINAL in record.is_done, so a container timeout would retire

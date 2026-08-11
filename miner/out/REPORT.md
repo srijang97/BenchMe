@@ -26,27 +26,24 @@ For reference only, 1/21 of *attempted* is 4.8%. **That is not a conversion rate
 | `rejected:regression_broken` | verdict on the commit | 3 |
 | `validated` | accepted | 1 |
 
+## Oracle composition
+
+How the fail-to-pass tests failed, across validated capsules. Descriptive only -- no label gates admission (`docs/council/ROUND_02_SYNTHESIS.md`).
+
+_No validated capsules yet._
+
+Apparatus: 10/21 adjudicated candidates (47.6%).
+
+> **TRIPWIRE** apparatus is 47.6%, above the 10% threshold. Stop mining and fix tooling before spending more of the corpus.
+
 ## Rejections by class
 
 | rejection class | count | what it means |
 |---|---|---|
-| `other` | 4 | unrecognised exception identity; see `validate.classify`'s `other:` fallthrough |
+| `other` | 4 | no longer produced; a class from the retired base-negative classifier |
 | `regression_broken` | 3 | code patch broke previously-passing tests |
 | `unchanged` | 3 | no test went fail->pass (see the `before_failed` caveat) |
-| `assertion` | 0 | should be impossible -- an assertion base negative qualifies |
-| `missing_api` | 0 | **base negative was AttributeError/ImportError/NameError/ModuleNotFoundError -- feature work, excluded by the assertion-only rule** |
-| `structural` | 0 | base negative was a syntax or collection error |
-
-**`missing_api` rejections: 0.** This is the price of the council's assertion-only rule, measured rather than assumed. A large number here is a finding to take back to the council; it is never a reason to loosen `validate.classify`.
-
-### Base-negative classes over every classified f2p node id
-
-| class | node ids | share |
-|---|---|---|
-| `other:unparsed` | 6 | 50% |
-| `assertion` | 5 | 42% |
-| `other:pydantic_core._pydantic_core.ValidationError` | 1 | 8% |
-| `missing_api` | 0 | 0% |
+| `unstable` | 0 | pass 1's fail->pass set did not reproduce in the full-suite pass-2 run -- flaky or selection-dependent |
 
 ## Apparatus failures -- our fault, not the repo's
 
@@ -128,7 +125,7 @@ A broken node id that is ABSENT from the after log did not fail -- it was rename
 
 The oracle node ids, so a reviewer can check them:
 
-- `a59dab90` `tests/test_dataclasses.py::test_dataclasses_inheritance_bare_class_not_used` -> base negative classified `assertion`
+- `a59dab90` `tests/test_dataclasses.py::test_dataclasses_inheritance_bare_class_not_used` -> failed as `?` before the fix
 
 ## Candidates by quarter
 
