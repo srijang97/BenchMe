@@ -166,17 +166,29 @@ def _runnable_targets(container, workdir, tests):
     candidate is booked as apparatus. Same for a test file the commit DELETES
     -- it is gone once the test patch applies. Filtering here keeps both cases
     out of the apparatus column.
+
+    Returns (targets, err). `err` is not None when the PROBE ITSELF failed:
+    an unchecked probe returns an empty set on failure, which is
+    indistinguishable from "the commit touches no runnable test" and lands as
+    `rejected:unchanged` -- the same shape as the `_numstat` defect fixed in
+    Task 2. The loop is written with `if ... then` rather than `[ -e p ] && ...`
+    precisely so the shell's exit status reports the probe, not whether the
+    last path happened to exist.
     """
     wanted = [t for t in tests
               if metrics.is_test_file(t)
               and PurePosixPath(t).name != "conftest.py"]
     if not wanted:
-        return []
-    script = "cd {wd} && for p in {ps}; do [ -e \"$p\" ] && echo \"$p\"; done".format(
+        return [], None
+    script = ("cd {wd} || exit 3; "
+              "for p in {ps}; do if [ -e \"$p\" ]; then echo \"$p\"; fi; done").format(
         wd=shlex.quote(workdir), ps=" ".join(shlex.quote(p) for p in wanted))
     r = _guard(quarters.exec_in(container, ["sh", "-c", script]), "target probe")
+    if r.returncode != 0:
+        return None, ("target probe failed (rc={}): {}".format(
+            r.returncode, (r.stdout + r.stderr)[:200]))
     present = set(r.stdout.split())
-    return [t for t in wanted if t in present]
+    return [t for t in wanted if t in present], None
 
 
 def validate_one(container, cand, repo, anchored, pass2=False):
@@ -184,13 +196,38 @@ def validate_one(container, cand, repo, anchored, pass2=False):
 
     Raises ContainerLost when the container itself is gone; that is a run-level
     problem, not a candidate-level one.
+
+    Owns the workdir's lifetime. The checkout is ~430 MB, so removing it only
+    on the success path lets a long `--limit` fill the disk; the clone then
+    starts failing and every later candidate is recorded `apparatus`, which
+    reads as a property of the candidates rather than of the run.
     """
-    sha, parent = cand["sha"], cand["parent"]
+    workdir = f"/work/{cand['sha'][:12]}"
     out = dict(cand)
     out["anchored"] = anchored
     out["pass"] = 2 if pass2 else 1
+    # Always present, so a reader can tell "no before run happened" (None)
+    # from "the before run had no failures" (0). See _measure.
+    out["before_failed"] = None
+    lost = False
+    try:
+        return _measure(container, cand, repo, out, workdir, pass2)
+    except ContainerLost:
+        # The container is about to be destroyed by validate_quarter; an exec
+        # against it would at best waste the timeout.
+        lost = True
+        raise
+    finally:
+        if not lost:
+            # Unguarded on purpose: raising ContainerLost out of a `finally`
+            # would replace the candidate's real outcome with the cleanup's.
+            quarters.exec_in(container, ["rm", "-rf", workdir], timeout=300)
+
+
+def _measure(container, cand, repo, out, workdir, pass2):
+    """The body of validate_one, minus the workdir lifetime."""
+    sha, parent = cand["sha"], cand["parent"]
     logs = record.LOGS / sha[:12]
-    workdir = f"/work/{sha[:12]}"
 
     tests, code = validate.split_paths(cand["files"])
     if not tests:
@@ -222,7 +259,10 @@ def validate_one(container, cand, repo, anchored, pass2=False):
     if pass2:
         targets = ["tests"]
     else:
-        targets = _runnable_targets(container, workdir, tests)
+        targets, probe_err = _runnable_targets(container, workdir, tests)
+        if probe_err:
+            out.update(status="apparatus", reason=probe_err)
+            return out
         if not targets:
             out.update(status="rejected:unchanged",
                        reason="no runnable test file among the touched test "
@@ -231,6 +271,16 @@ def validate_one(container, cand, repo, anchored, pass2=False):
 
     before_out = _pytest(container, workdir, targets, logs / f"{BEFORE}.log")
     before = tierb.parse_outcomes(before_out)
+    # Recorded on every candidate that got a before run, because it is the
+    # only way to audit a `rejected:unchanged` afterwards. The image is
+    # anchored to the lockfile at the quarter's LAST commit, so a candidate
+    # from mid-quarter can see hundreds of failures that have nothing to do
+    # with it (measured: 840 of 6437 on 2025Q3, from a pydantic-core version
+    # skew). If the candidate's own oracle test is among them it fails on both
+    # sides, never becomes f2p, and is rejected -- a drift artefact wearing
+    # the shape of a verdict. `anchored` does not catch this: it is true and
+    # the environment is still wrong for the commit.
+    out["before_failed"] = sum(1 for v in before.values() if v == "FAILED")
     try:
         failures = validate.parse_failures(before_out)
     except RuntimeError as exc:
@@ -245,8 +295,6 @@ def validate_one(container, cand, repo, anchored, pass2=False):
     after_out = _pytest(container, workdir, targets, logs / f"{AFTER}.log")
     after = tierb.parse_outcomes(after_out)
 
-    quarters.exec_in(container, ["rm", "-rf", workdir])
-
     diff = validate.diff_outcomes(before, after)
     out["f2p"] = diff["f2p"]
     out["p2p_count"] = len(diff["p2p"])
@@ -257,13 +305,39 @@ def validate_one(container, cand, repo, anchored, pass2=False):
         out.update(status="apparatus",
                    reason="no test outcomes parsed on the before side")
         return out
+    # The after side needs the same guard. An empty after -- a collection
+    # crash the code patch caused, a container hiccup -- makes every f2p
+    # comparison fail, so diff["f2p"] is empty and the next branch books
+    # `rejected:unchanged`: apparatus wearing a verdict.
+    if not after:
+        out.update(status="apparatus",
+                   reason="no test outcomes parsed on the after side")
+        return out
     if not diff["f2p"]:
         out.update(status="rejected:unchanged",
                    reason="no test went fail->pass")
         return out
 
-    classes = {t: validate.classify(failures.get(t, "AssertionError"))
-               for t in diff["f2p"]}
+    # NEVER default a missing node id to AssertionError. Task 4 rebuilt
+    # parse_failures so that an unparseable detail becomes "unparsed" and is
+    # rejected; `failures.get(t, "AssertionError")` would restore that default
+    # at the call site, and AssertionError is the one class that QUALIFIES a
+    # candidate. `-p no:pretty` removed the one plugin known to delete the
+    # short-summary block, but the hole is structural: any future reporter
+    # change, plugin or truncated log would leave an f2p node id absent from
+    # `failures` and admit it as `assertion` with nothing to show for it.
+    # Silently rejecting a valid candidate only shrinks the corpus; silently
+    # admitting an invalid one corrupts every number downstream.
+    missing = [t for t in diff["f2p"] if t not in failures]
+    if missing:
+        out.update(status="apparatus",
+                   reason=f"no short-summary line for {len(missing)} of "
+                          f"{len(diff['f2p'])} f2p node id(s), first "
+                          f"{missing[0]!r}; the failure detail pytest printed "
+                          f"was not captured")
+        return out
+
+    classes = {t: validate.classify(failures[t]) for t in diff["f2p"]}
     out["failure_classes"] = classes
     if not any(c == "assertion" for c in classes.values()):
         dominant = sorted(classes.values())[0]
@@ -344,7 +418,7 @@ def validate_quarter(quarter, limit, keep_images, force):
             except ContainerLost:
                 raise
             except Exception:
-                return dict(cand, status="error",
+                return dict(cand, status="error", before_failed=None,
                             reason=traceback.format_exc()[-1500:])
 
         survivors = []
@@ -358,7 +432,13 @@ def validate_quarter(quarter, limit, keep_images, force):
             for cand in survivors:
                 write(attempt(cand, pass2=True))
         except ContainerLost as exc:
-            write(dict(cand, status="apparatus", reason=str(exc)))
+            # `error`, not `apparatus`. Both are our fault, but apparatus is
+            # TERMINAL in record.is_done, so a container timeout would retire
+            # a candidate that may be perfectly valid and never look at it
+            # again. `error` was made non-terminal in Task 1 for exactly this:
+            # infrastructure loss is retried once the infrastructure is fixed.
+            write(dict(cand, status="error", before_failed=None,
+                       reason=f"container lost: {exc}"))
             print(f"  stopping {quarter}: {exc}")
     finally:
         quarters.stop_container(cid)
