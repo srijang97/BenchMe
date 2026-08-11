@@ -1,0 +1,40 @@
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import validate  # noqa: E402
+
+
+def test_split_paths_separates_tests_from_code():
+    files = [
+        "pydantic/main.py",
+        "tests/test_main.py",
+        "pydantic/_internal/_fields.py",
+        "tests/benchmarks/test_north_star.py",
+        "docs/index.md",
+    ]
+    tests, code = validate.split_paths(files)
+    assert tests == ["tests/benchmarks/test_north_star.py", "tests/test_main.py"]
+    assert code == ["docs/index.md", "pydantic/_internal/_fields.py",
+                    "pydantic/main.py"]
+    assert not set(tests) & set(code)
+
+
+def test_diff_outcomes_classifies_each_test():
+    before = {
+        "tests/test_a.py::test_new": "FAILED",
+        "tests/test_a.py::test_old": "PASSED",
+        "tests/test_a.py::test_breaks": "PASSED",
+        "tests/test_a.py::test_skipped": "SKIPPED",
+    }
+    after = {
+        "tests/test_a.py::test_new": "PASSED",
+        "tests/test_a.py::test_old": "PASSED",
+        "tests/test_a.py::test_breaks": "FAILED",
+        "tests/test_a.py::test_skipped": "SKIPPED",
+    }
+    result = validate.diff_outcomes(before, after)
+    assert result["f2p"] == ["tests/test_a.py::test_new"]
+    assert result["p2p"] == ["tests/test_a.py::test_old"]
+    assert result["broken"] == ["tests/test_a.py::test_breaks"]
