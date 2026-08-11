@@ -9,8 +9,21 @@ import record
 
 
 def cmd_enumerate(args):
-    print("enumerate not implemented yet", file=sys.stderr)
-    return 1
+    import candidates
+
+    rows = candidates.enumerate_candidates(record.REPO)
+    ordered = candidates.stratified_order(rows)
+    record.CANDIDATES.unlink(missing_ok=True)
+    for r in ordered:
+        record.append(record.CANDIDATES, r)
+
+    by_q = {}
+    for r in ordered:
+        by_q[r["quarter"]] = by_q.get(r["quarter"], 0) + 1
+    print(f"enumerated {len(ordered)} candidates")
+    for q in sorted(by_q, reverse=True)[:12]:
+        print(f"  {q}: {by_q[q]}")
+    return 0
 
 
 def cmd_validate(args):
