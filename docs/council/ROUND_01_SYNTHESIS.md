@@ -14,9 +14,9 @@
 | GLM 5.2 | Zhipu | xhigh | complete |
 | Qwen3.8 Max | Alibaba | xhigh | **partial — truncated after Q1** |
 | Grok 4.5 | xAI | — | unavailable (503 upstream) |
-| GPT 5.6 Sol | OpenAI | — | pending manual run |
+| GPT 5.6 Sol | OpenAI | xhigh | complete (run after synthesis) |
 
-Quorum: 5 complete non-chair responses across 5 labs. Met.
+Quorum: 6 complete non-chair responses across 5 labs. Met.
 
 ---
 
@@ -180,6 +180,68 @@ still beating public benchmarks.
 
 ---
 
+## 5b. Addendum — GPT 5.6 Sol (xhigh), run after the synthesis above
+
+Sol ran on the identical motion with no sight of the other answers or of this
+synthesis. It confirms the three unanimous findings, making them **6 of 6**, and
+narrows Q4 further than anyone else: maintainability must not gate correctness
+unless first converted into an explicit predeclared mechanical constraint, and
+"is this a hack?" should trigger investigation and new executable probes rather
+than an LLM-issued failure.
+
+### The argument that changes the weighting
+
+> "Oracle errors of 4–12 points are comparable to or larger than the
+> experiment's detectable model effects."
+
+This is the sharpest quantitative point of the round and nobody else made it.
+Re-scoring against hardened suites moved published agents by 4.2–9.0 points.
+Our minimum detectable effect at 30 tasks × k=5 is about 12.5 points. **The
+oracle's own error bar is the same order of magnitude as the effect we are
+trying to measure.** That is a strong argument for strictness at entry, and it
+cuts directly against my staged ruling.
+
+### Four mechanisms adopted from Sol
+
+1. **Quarantine, never repair in place, never "vote".** If a valid alternate
+   fails, the capsule leaves the run immediately. It does not stay in while
+   someone adjudicates test-versus-alternate. If validity stays debatable, the
+   capsule is excluded rather than resolved by judgement.
+2. **A tier-correlated oracle defect invalidates the capsule across *all*
+   tiers, not only the disadvantaged one.** Correcting only where a tier was
+   hurt is itself a biased correction.
+3. **A near-miss per substantive requirement**, not one per capsule. Near-misses
+   are mechanical and cheap; one per capsule under-tests multi-requirement tasks.
+4. **`indeterminate` becomes a trial outcome.** When a semantic concern cannot
+   be operationalised, mark the trial indeterminate and exclude it from cost per
+   solved task rather than forcing a pass or a fail. This stops judge-shaped
+   concerns leaking into the headline metric.
+
+### Revised ruling on alternate count
+
+Sol requires two structurally distinct alternates at entry, joining Luna and
+DeepSeek. That is now four of seven seats against my one-at-entry ruling, and
+Sol supplies the quantitative reason.
+
+**I am amending rather than reversing, because the two positions are coupled in
+a way no seat noticed.** Harvesting alternates from the experiment only surfaces
+over-strictness that somebody actually looks at — which means reviewing rejected
+patches. But everyone already agreed to a per-tier oracle-rejection audit, and
+that audit *is* a review of rejected patches. The harvesting cost is therefore
+already committed; it is a byproduct of an audit we are doing regardless.
+
+So the amended ruling:
+
+- **One authored alternate at entry is sufficient *if and only if* the per-tier
+  oracle-rejection audit is mandatory and runs continuously.**
+- **If that audit is ever descoped, the entry bar rises to two alternates.**
+
+The alternate count and the audit trade off against each other. What is not
+acceptable is one alternate *and* no audit, which is where cost pressure will
+naturally push.
+
+---
+
 ## 6. The contract, as it now stands
 
 A capsule may enter a decision-grade run when it has:
@@ -191,13 +253,27 @@ A capsule may enter a decision-grade run when it has:
    failure, not a collection or import error;
 3. reference positive;
 4. regression check on adjacent unchanged behaviour;
-5. no-op / near-miss rejection;
+5. a near-miss rejection **per substantive requirement**, not one per capsule;
 6. **one authored alternate that passes**, written from the statement without
-   sight of the reference diff;
+   sight of the reference diff — conditional on the audit in the note below;
 7. the fixed adversarial probe battery, with environment-level sealing verified
    once per environment manifest;
 8. determinism preflight — reference passes k=3 consecutive runs;
 9. pinned environment, budget and trial policy.
+
+**Coupling condition**: item 6 stands at one alternate *only while* the per-tier
+oracle-rejection audit is mandatory and continuous. Descope the audit and the
+entry bar becomes two alternates. One alternate with no audit is not a
+permitted configuration.
+
+**Failure handling**: a failing valid alternate quarantines the capsule
+immediately — no in-place repair, no adjudication while it remains in the run.
+A tier-correlated oracle defect invalidates that capsule across every tier, not
+only the tier it disadvantaged. Debatable validity means exclusion, not a
+casting vote.
+
+**Trial outcomes** are solved, unsolved, or `indeterminate`. Indeterminate
+trials are excluded from cost per solved task and reported separately.
 
 Reported but never gating: mutation survival, judge-based scope and hack audit
 on a sample of passing runs, per-tier oracle-rejection rate.
