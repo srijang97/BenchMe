@@ -113,34 +113,125 @@ def diff_outcomes(before, after):
     return {"f2p": sorted(f2p), "p2p": sorted(p2p), "broken": sorted(broken)}
 
 
-# pytest's short summary line, e.g.
+# pytest's FAILED/ERROR short-summary lines, e.g.
 #   FAILED tests/test_x.py::test_y - AttributeError: no attribute 'z'
 #   FAILED tests/test_x.py::test_y - assert 1 == 2
-# Node ids can contain spaces inside parametrised brackets, so the node id is
-# matched non-greedily up to the " - " separator rather than as \S+. The
-# screener learned this the hard way: a \S+ node-id pattern silently dropped
-# 1,604 of 1,977 tests.
-FAILED_LINE = re.compile(r"^FAILED (?P<nodeid>.+?) - (?P<detail>.*)$", re.M)
+#   ERROR  tests/test_x.py::test_y - RuntimeError: fixture blew up
+#   ERROR  tests/test_x.py                      (collection error: no detail)
+#
+# The runner that produces this stdout MUST set both COLUMNS (wide, e.g.
+# 200) and CI=1. Confirmed against pytest 8.3.4 / Python 3.14.4: without a
+# wide COLUMNS, pytest trims the "- detail" portion to terminal width and,
+# when it doesn't fit, omits it entirely -- a truncated line is then
+# indistinguishable from a line that never had a detail. CI=1 makes
+# _pytest.config.running_on_ci() true, which additionally disables that
+# trimming. A first capture attempt without COLUMNS set truncated real
+# output to "- Attri...", corrupting the exception name.
+#
+# Node ids can contain spaces inside parametrised brackets, so the node id
+# is never matched as \S+: the screener learned this the hard way, when a
+# \S+ node-id pattern silently dropped 1,604 of 1,977 tests. Node ids can
+# also contain the literal separator " - " inside their own brackets, e.g.
+# test_range[1 - 2] (confirmed against real pytest output), so the split
+# between node id and detail is not a single non-greedy regex group -- see
+# _split_nodeid_detail, which scans for the first " - " that leaves the
+# node id's brackets balanced.
+LINE = re.compile(r"^(?P<kind>FAILED|ERROR) (?P<rest>\S.*)$", re.M)
 EXC_NAME = re.compile(r"^(?P<exc>[A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception|Exit))\b")
 
 MISSING_API = {"AttributeError", "ImportError", "ModuleNotFoundError",
                "NameError"}
-STRUCTURAL = {"SyntaxError", "IndentationError", "TabError",
-              "CollectionError", "Collection"}
+# CollectError, not CollectionError: pytest's own exception class for a
+# collection failure. Reachable now via the ERROR-line branch of
+# parse_failures below, not via EXC_NAME (pytest's collection-error summary
+# line carries no "CollectError:" prefix to match against at all -- see the
+# module comment above).
+STRUCTURAL = {"SyntaxError", "IndentationError", "TabError", "CollectError"}
 FAILURE_CLASSES = {"assertion", "missing_api", "structural"}
 
 
-def parse_failures(stdout):
-    """node id -> exception type name, from pytest's short summary.
+def _split_nodeid_detail(rest):
+    """Split "nodeid - detail" at the first " - " that leaves the node id's
+    brackets balanced (parametrised brackets can contain " - " themselves,
+    e.g. test_range[1 - 2]).
 
-    A bare `assert` prints no exception name at all, so it is mapped to
-    AssertionError explicitly rather than falling through to `other:`.
+    Returns (nodeid, detail) when a balanced separator is found, else
+    (rest, None). None is not itself an error: pytest's own collection-error
+    summary lines (`ERROR path/to/test.py`, no trailing detail) legitimately
+    carry no separator at all. Callers decide what an absent separator means
+    for their line kind.
+    """
+    start = 0
+    while True:
+        idx = rest.find(" - ", start)
+        if idx == -1:
+            return rest, None
+        candidate = rest[:idx]
+        if candidate.count("[") == candidate.count("]"):
+            return candidate, rest[idx + 3:]
+        start = idx + 3
+
+
+def parse_failures(stdout):
+    """node id -> exception type name, from pytest's FAILED and ERROR
+    short-summary lines.
+
+    FAILED lines: pytest never emits a bare "FAILED nodeid" with no detail
+    for a genuine failure, so a FAILED line with no " - " separator means
+    the line was truncated by terminal width (see the module comment on
+    COLUMNS/CI). That is a misconfigured-capture signal, not a line to
+    skip, so it raises rather than being silently dropped -- the same
+    silent-drop failure class as the \\S+ node-id regression.
+
+    A bare `assert` prints no exception name at all ("- assert 1 == 2"), so
+    that detail is mapped to AssertionError explicitly. Everything else
+    that isn't an "ExcName: message" recognised by EXC_NAME and doesn't
+    start with "assert" maps to the raw identity "unparsed" -- which
+    classify() then reports as "other:unparsed", rejected and counted --
+    rather than falling through to AssertionError. That fallback used to
+    silently *admit* invalid candidates: confirmed against real pytest
+    output, `Failed: DID NOT RAISE <class 'ValueError'>` from pytest.fail()
+    and bare exception names pytest doesn't prefix with
+    Error/Exception/Exit (StopIteration, a Django *.DoesNotExist,
+    KeyboardInterrupt) all used to land in AssertionError -> "assertion"
+    and be wrongly accepted as valid base negatives.
+
+    ERROR lines (fixture/setup errors, and collection errors such as a
+    module-level SyntaxError or ImportError) never reached an assertion, so
+    they are unconditionally structural regardless of detail. Confirmed
+    against real pytest output that collection errors summarize as `ERROR
+    path` with no detail at all, while setup/fixture errors summarize as
+    `ERROR nodeid - ExcName: message`; both forms are handled the same way
+    here since neither can be a valid "assertion" base negative.
     """
     out = {}
-    for m in FAILED_LINE.finditer(stdout):
-        detail = m.group("detail").strip()
+    for m in LINE.finditer(stdout):
+        kind = m.group("kind")
+        rest = m.group("rest").strip()
+        nodeid, detail = _split_nodeid_detail(rest)
+        nodeid = nodeid.strip()
+
+        if kind == "ERROR":
+            out[nodeid] = "CollectError"
+            continue
+
+        if detail is None:
+            raise RuntimeError(
+                f"FAILED line has no ' - ' separator, which pytest never "
+                f"omits for a genuine failure -- this line was truncated "
+                f"by terminal width. Re-capture with COLUMNS set wide and "
+                f"CI=1: {rest!r}"
+            )
+        detail = detail.strip()
         exc = EXC_NAME.match(detail)
-        out[m.group("nodeid").strip()] = exc.group("exc") if exc else "AssertionError"
+        if exc:
+            out[nodeid] = exc.group("exc")
+        elif detail.startswith("assert") or detail == "":
+            out[nodeid] = "AssertionError"
+        else:
+            # Raw identity only -- classify() owns the "other:" prefix, the
+            # same as it does for any other unrecognised exc_name.
+            out[nodeid] = "unparsed"
     return out
 
 
@@ -150,6 +241,11 @@ def classify(exc_name):
     class, because the assertion-only rule filters out feature work (a new
     feature's test fails at the parent with AttributeError) and we need to
     know what that costs in yield before assuming the rule was right.
+
+    TypeError (e.g. from a changed function signature) is deliberately left
+    to fall through to `other:TypeError` rather than being folded into
+    MISSING_API -- whether a signature change should count as missing_api
+    is a rule question for the project's decision council, not a code fix.
     """
     if exc_name == "AssertionError":
         return "assertion"
