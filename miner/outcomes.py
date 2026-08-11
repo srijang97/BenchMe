@@ -152,37 +152,58 @@ def base_id(nodeid):
 def diff(before, after):
     """Compare two collapsed status maps.
 
-    f2p        -- FAILURE before, PASSED after. The oracle. Requires an exact
-                  node id match on both sides.
-    p2p        -- PASSED on both. The regression set.
-    broken     -- PASSED before, and after either FAILURE or gone, where the
-                  disappearance is not explained by a rename.
-    renamed    -- PASSED before and gone after, but the same test function
-                  still has at least as many passing cases. Reported, not
-                  penalised.
-    error_base -- could not run before, PASSED after. Not admissible as an
-                  oracle (decision 2), but counted so the cost of that gate
-                  is measurable.
+    f2p           -- FAILURE before, PASSED after. The oracle. Requires an
+                      exact node id match on both sides.
+    p2p           -- PASSED on both. The regression set.
+    broken        -- PASSED before, and after either FAILURE, ERROR, or gone,
+                      where a disappearance is not explained by an exact
+                      rename swap.
+    renamed       -- PASSED before and gone after, reconciled against an
+                      equal-sized batch of newly-appeared passing cases under
+                      the same test function. Reported, not penalised.
+    error_base    -- could not run before, PASSED after. Not admissible as an
+                      oracle (decision 2), but counted so the cost of that
+                      gate is measurable.
+    skipped_after -- PASSED before, SKIPPED after. Not a regression -- the
+                      test did not fail -- but suspicious enough (a patch
+                      that skips a previously-passing test) to stay visible
+                      rather than being folded into `broken` or dropped.
 
     Why renames are reconciled at all: pydantic parametrises one test on
     source line numbers, so applying the code patch renumbers the ids without
     changing behaviour. Treating that as a broken regression rejected three
-    good candidates in the 2025Q3 batch. The reconciliation is deliberately
-    narrow -- it requires the passing count for that test function not to
-    drop -- so it cannot excuse a test that genuinely disappeared.
-    """
-    f2p, p2p, broken, renamed, error_base = [], [], [], [], []
+    good candidates in the 2025Q3 batch.
 
-    after_pass_by_base = {}
-    for nodeid, status in after.items():
-        if status == PASSED:
-            key = base_id(nodeid)
-            after_pass_by_base[key] = after_pass_by_base.get(key, 0) + 1
-    before_pass_by_base = {}
+    The reconciliation is deliberately narrow, and it is an EXACT swap, not a
+    "count did not drop" check: for each test function, it counts the passing
+    node ids that vanished (passed before, absent after) against the passing
+    node ids that appeared (passing after, absent before), and excuses the
+    vanished ones as `renamed` only when those two counts are equal. A
+    "count did not drop" rule can be satisfied by an unrelated gain masking a
+    genuine loss elsewhere in the same function (one test vanishes, two
+    unrelated ones appear) -- that is a real regression wearing a rename's
+    clothes. At the node-id level a renumbering and a delete-plus-unrelated-
+    add are genuinely indistinguishable, so the equal-counts tie-break is a
+    deliberate choice, not an oversight: it recognises the measured pydantic
+    case (a patch shifts source lines, every id under the base is renumbered,
+    the count is unchanged) while refusing the ambiguous ones. Ambiguity
+    resolves toward `broken`, i.e. toward rejecting the candidate, because a
+    false rejection only costs one candidate out of thousands whereas a false
+    admission puts a capsule with a real regression into the corpus.
+    """
+    f2p, p2p, broken = [], [], []
+    renamed, error_base, skipped_after = [], [], []
+
+    vanished_by_base = {}
     for nodeid, status in before.items():
-        if status == PASSED:
+        if status == PASSED and nodeid not in after:
             key = base_id(nodeid)
-            before_pass_by_base[key] = before_pass_by_base.get(key, 0) + 1
+            vanished_by_base[key] = vanished_by_base.get(key, 0) + 1
+    appeared_by_base = {}
+    for nodeid, status in after.items():
+        if status == PASSED and nodeid not in before:
+            key = base_id(nodeid)
+            appeared_by_base[key] = appeared_by_base.get(key, 0) + 1
 
     for nodeid, was in before.items():
         now = after.get(nodeid)
@@ -195,13 +216,16 @@ def diff(before, after):
                 p2p.append(nodeid)
             elif now == FAILURE:
                 broken.append(nodeid)
+            elif now == SKIPPED:
+                skipped_after.append(nodeid)
             elif now is None:
                 key = base_id(nodeid)
-                if after_pass_by_base.get(key, 0) >= before_pass_by_base[key]:
+                if vanished_by_base.get(key, 0) == appeared_by_base.get(key, 0):
                     renamed.append(nodeid)
                 else:
                     broken.append(nodeid)
             else:
                 broken.append(nodeid)
     return {"f2p": sorted(f2p), "p2p": sorted(p2p), "broken": sorted(broken),
-            "renamed": sorted(renamed), "error_base": sorted(error_base)}
+            "renamed": sorted(renamed), "error_base": sorted(error_base),
+            "skipped_after": sorted(skipped_after)}

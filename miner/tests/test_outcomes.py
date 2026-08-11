@@ -235,4 +235,33 @@ def test_diff_ignores_skipped_tests_entirely():
     after = {"t.py::s": outcomes.PASSED}
     d = outcomes.diff(before, after)
     assert all(d[k] == [] for k in ("f2p", "p2p", "broken", "renamed",
-                                    "error_base"))
+                                    "error_base", "skipped_after"))
+
+
+def test_diff_rename_reconciliation_requires_an_exact_swap():
+    # THE REVIEWER'S DEFECT. A "count did not drop" rule can be satisfied by
+    # an unrelated gain masking a genuine loss: test_a[2] vanishes but two
+    # unrelated cases (test_a[3], test_a[4]) appear under the same function,
+    # so the naive count check (2 before -> 3 after) would excuse it. The
+    # reconciliation must instead require the vanished and appeared counts to
+    # be exactly equal before excusing anything as a rename.
+    before = {"t.py::test_a[1]": outcomes.PASSED,
+              "t.py::test_a[2]": outcomes.PASSED}
+    after = {"t.py::test_a[1]": outcomes.PASSED,
+             "t.py::test_a[3]": outcomes.PASSED,
+             "t.py::test_a[4]": outcomes.PASSED}
+    d = outcomes.diff(before, after)
+    assert d["renamed"] == []
+    assert d["broken"] == ["t.py::test_a[2]"]
+
+
+def test_diff_routes_a_newly_skipped_test_to_its_own_bucket():
+    # A test that was passing and is now skipped is not broken -- it never
+    # failed -- but it must not vanish either. It gets its own bucket so a
+    # patch that skips a previously-passing test stays visible.
+    before = {"t.py::a": outcomes.PASSED}
+    after = {"t.py::a": outcomes.SKIPPED}
+    d = outcomes.diff(before, after)
+    assert d["skipped_after"] == ["t.py::a"]
+    assert d["broken"] == []
+    assert d["p2p"] == []
