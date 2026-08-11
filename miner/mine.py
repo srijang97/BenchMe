@@ -3,7 +3,6 @@
 See docs/superpowers/specs/2026-08-11-miner-stages-0-2-design.md
 """
 import argparse
-import sys
 
 import record
 
@@ -38,8 +37,13 @@ def cmd_validate(args):
 
 
 def cmd_report(args):
-    print("report not implemented yet", file=sys.stderr)
-    return 1
+    import report
+
+    text = report.render()
+    path = record.OUT / "REPORT.md"
+    path.write_text(text, encoding="utf-8")
+    print(f"wrote {path}")
+    return 0
 
 
 def main(argv=None):
