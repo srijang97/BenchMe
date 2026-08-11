@@ -30,7 +30,13 @@ SIZE_BUCKETS = ((2, "xs"), (4, "s"), (7, "m"))  # else "l"
 # and pyright, never executed by pytest. Eight of ten apparatus cases in the
 # first 2025Q3 batch.
 NON_PYTEST_TEST_DIRS = {
-    "pydantic": ("tests/typechecking/",),
+    # tests/mypy: found by the 2025Q3 re-run, not by inspection. Its
+    # modules/ and outputs/ trees are mypy plugin fixtures -- pointing pytest
+    # at them collects 0 items and reports errors, which the old code booked
+    # as apparatus and (after the empty-targets fix) would book as apparatus
+    # again. Adding it here keeps those candidates out of the funnel entirely
+    # rather than spending a container slot to discover the same thing.
+    "pydantic": ("tests/typechecking/", "tests/mypy/"),
 }
 
 
