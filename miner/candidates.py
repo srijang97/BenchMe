@@ -56,12 +56,25 @@ def subsystem_of(files):
 def _numstat(repo, parent, sha, paths):
     """Added/deleted line totals for the given paths. Needs blobs, which the
     local clone has after its lazy fetch -- this is the miner on a local
-    clone, not the screener's blobless sweep."""
+    clone, not the screener's blobless sweep.
+
+    Raises RuntimeError on a non-zero git exit rather than returning (0, 0).
+    The caller reads a zero `added` as "deletion-only test change" and drops
+    the commit, so a silent zero would record an apparatus failure -- a
+    missing blob, a bad pathspec, a locked index, a re-clone with
+    --filter=blob:none against an unreachable promisor -- as a verdict about
+    the commit. That confusion is the failure class this project has already
+    hit seven times, and it is why gitmeta.log_commits raises here too.
+    """
     if not paths:
         return 0, 0
     cmd = ["git", "diff", "--numstat", parent, sha, "--", *paths]
     proc = subprocess.run(cmd, cwd=str(repo), capture_output=True, text=True,
                           encoding="utf-8", errors="replace")
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"git diff --numstat failed ({proc.returncode}) for {sha} "
+            f"against {parent} in {repo}: {proc.stderr.strip()[:500]}")
     added = deleted = 0
     for line in proc.stdout.splitlines():
         cols = line.split("\t")
@@ -73,7 +86,13 @@ def _numstat(repo, parent, sha, paths):
 
 def enumerate_candidates(repo):
     commits = gitmeta.log_commits(repo)
-    by_sha = {c.sha: c for c in commits}
+
+    # Provenance stamped onto every record. Without it a moved corpus is
+    # undetectable across runs: HEAD can advance, or a fetch can bring new
+    # commits, and two candidate files would look comparable when they are
+    # not. Cheap to record, impossible to reconstruct after the fact.
+    repo_head = gitmeta.head_sha(repo)
+    commits_total = len(commits)
 
     reverted_subjects = set()
     for c in commits:
@@ -81,7 +100,6 @@ def enumerate_candidates(repo):
         if m:
             reverted_subjects.add(m.group("orig").strip())
 
-    # later commits touching the same file within 48h -> hotfix signal
     out = []
     for c in commits:
         if not metrics.is_candidate_pair(c):
@@ -89,8 +107,13 @@ def enumerate_candidates(repo):
         if not c.parents:
             continue
         parent = c.parents[0]
-        if parent not in by_sha and len(c.parents) != 1:
-            continue
+        # No parent-reachability guard. Checking `parent in by_sha` would be
+        # wrong: by_sha comes from log_commits, which passes --no-merges, so
+        # merge commits are absent from it by construction while remaining
+        # perfectly valid git objects that `git diff` handles fine. Guarding
+        # on it would silently drop every candidate whose parent is a merge.
+        # A genuinely unreachable parent now surfaces as a raised error from
+        # _numstat instead of a silent exclusion.
 
         tests = [f for f in c.files if metrics.is_test_file(f)]
         sources = [f for f in c.files if metrics.is_source_file(f)]
@@ -115,6 +138,9 @@ def enumerate_candidates(repo):
             "n_files": len(c.files),
             "size_bucket": size_bucket(len(c.files)),
             "subsystem": subsystem_of(c.files),
+            "stratum": f"{subsystem_of(c.files)}:{size_bucket(len(c.files))}",
+            "repo_head": repo_head,
+            "repo_commits_total": commits_total,
             "test_lines_added": t_add,
             "source_lines_added": s_add,
             "test_source_ratio": round(t_add / s_add, 3) if s_add else None,
@@ -126,15 +152,28 @@ def enumerate_candidates(repo):
 
 def stratified_order(records):
     """Round-robin across (subsystem, size_bucket) so a small batch is not
-    drawn from one easy corner of the distribution."""
+    drawn from one easy corner of the distribution.
+
+    Stamps `cycle` (1-based: which round-robin pass emitted the record) so the
+    sampling structure is legible from the data alone. Reading the first N rows
+    of a round-robin is NOT reading the top N of a ranked queue: strata are
+    equalised per cycle, not weighted by mass, so a prefix over-samples thin
+    strata. Any rate computed from a truncated prefix must be reweighted per
+    stratum before it can be called a corpus rate, and `cycle` is what makes
+    that possible without re-deriving the ordering.
+    """
     strata = {}
     for r in records:
         strata.setdefault((r["subsystem"], r["size_bucket"]), []).append(r)
     for group in strata.values():
         group.sort(key=lambda r: r["date"], reverse=True)
     ordered, keys = [], sorted(strata)
+    cycle = 0
     while any(strata[k] for k in keys):
+        cycle += 1
         for k in keys:
             if strata[k]:
-                ordered.append(strata[k].pop(0))
+                r = strata[k].pop(0)
+                r["cycle"] = cycle
+                ordered.append(r)
     return ordered
