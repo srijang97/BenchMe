@@ -34,7 +34,11 @@ def main():
     old = load(OLD)
     # The new records were appended after the archived baseline, so skip the
     # first len(old) lines of the live file rather than assuming a clean file.
-    new = load(NEW, skip=len(old))
+    # The live file is append-only and now holds more than one re-run, so a
+    # fixed skip would read a stale run. load() is last-write-wins by sha, so
+    # reading the whole file yields the MOST RECENT verdict per candidate --
+    # which is what "the current code's answer" means.
+    new = load(NEW)
 
     print(f"baseline: {len(old)} candidates    re-run: {len(new)} candidates\n")
 
