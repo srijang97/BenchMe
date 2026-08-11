@@ -131,16 +131,32 @@ def _pytest(container, workdir, targets, log_path, phase, timeout=1800):
     `records` is the raw list of outcomes.Record, kept because labelling needs
     each failing node's message and the collapsed map does not carry it.
     Raises ValueError (from outcomes.parse_report) when the report is
-    malformed; the caller books that as apparatus.
+    malformed OR truncated -- the latter meaning the plugin never wrote its
+    sessionfinish terminator, so the session did not run to the end. The
+    caller books either as apparatus.
 
     The checkout goes on PYTHONPATH because the image deliberately does NOT
     contain the project itself -- see quarters' module docstring. The reporter
     directory goes on PYTHONPATH too, so `-p benchme_reporter` can import it.
     """
-    report_path = f"/tmp/benchme-{phase}-{Path(workdir).name}.jsonl"
+    report_path = f"/tmp/benchme-{phase}-{PurePosixPath(workdir).name}.jsonl"
     wd = shlex.quote(workdir)
+    # `|| exit 3` is the same idiom _runnable_targets uses. The point is that
+    # a failed `cd` must not let the `cat` below read a STALE report -- one
+    # left at this exact path by an earlier run of the same candidate and
+    # phase, reachable on a `--force` re-run inside one container. Under the
+    # old `cd && rm -f && pytest`, a failed cd skipped both the rm and pytest,
+    # the stale file survived, and the cat returned the PREVIOUS run's data as
+    # this run's measurement.
+    #
+    # The `rm -f` goes BEFORE the cd, not after it: `exit 3` terminates the
+    # shell, so an rm sequenced after the cd is skipped on exactly the branch
+    # that needs it (verified). Unlinking first means a failed cd leaves no
+    # report at all, the cat fails, and _pytest raises -- apparatus, which is
+    # the honest answer. The path is absolute, so removing it before the cd is
+    # safe.
     cmd = (
-        "cd {wd} && rm -f {rp} && {env}={rp} PYTHONPATH={rd}:{wd} "
+        "rm -f {rp}; cd {wd} || exit 3; {env}={rp} PYTHONPATH={rd}:{wd} "
         "{argv} -p {plugin} {t} 2>&1"
     ).format(
         wd=wd, rp=shlex.quote(report_path), env=quarters.REPORT_ENV,
@@ -299,6 +315,16 @@ def _measure(container, cand, repo, out, workdir, pass2):
                                if v == outcomes.FAILURE)
     out["before_collect_errors"] = [r.nodeid for r in before_collect]
 
+    # Checked HERE, before the code patch and the second pytest invocation. A
+    # candidate with no before-side outcomes is already dead; running the full
+    # after pass to reach the same conclusion just buys a second full pytest
+    # run per dead candidate. The `if not after` guard below has to stay where
+    # it is -- it cannot be known any earlier.
+    if not before:
+        out.update(status="apparatus",
+                   reason="no test outcomes on the before side")
+        return out
+
     err = _apply(container, workdir, code_patch, "code")
     if err:
         out.update(status="apparatus", reason=err)
@@ -312,10 +338,6 @@ def _measure(container, cand, repo, out, workdir, pass2):
         return out
     out["after_collect_errors"] = [r.nodeid for r in after_collect]
 
-    if not before:
-        out.update(status="apparatus",
-                   reason="no test outcomes on the before side")
-        return out
     # The after side needs the same guard. An empty after makes every f2p
     # comparison fail, so diff["f2p"] is empty and the next branch books
     # `rejected:unchanged`: apparatus wearing a verdict.

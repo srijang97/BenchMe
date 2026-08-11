@@ -7,8 +7,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import outcomes  # noqa: E402
 
 
+_FINISH = {"kind": "sessionfinish", "exitstatus": 1}
+
+
 def _jsonl(*records):
-    return "\n".join(json.dumps(r) for r in records) + "\n"
+    """A COMPLETE report: the reporter's terminator is appended automatically.
+
+    parse_report requires it, so a helper that omitted it would make every
+    test here exercise the truncation path by accident. The tests that care
+    about a missing terminator build their text without this helper.
+    """
+    return "\n".join(json.dumps(r) for r in (*records, _FINISH)) + "\n"
 
 
 def test_parse_report_separates_collect_errors_from_tests():
@@ -41,9 +50,51 @@ def test_parse_report_raises_on_malformed_line():
     # that reads like "this commit changed nothing".
     try:
         outcomes.parse_report('{"kind": "test", "nodei')
-    except ValueError:
+    except ValueError as exc:
+        # Pinned to the JSON complaint specifically: this input also lacks a
+        # terminator, and without the check the test would pass for the wrong
+        # reason once the truncation guard exists.
+        assert "not valid JSON" in str(exc)
         return
     raise AssertionError("expected ValueError on malformed JSONL")
+
+
+def test_parse_report_raises_when_the_sessionfinish_record_is_missing():
+    # THE TRUNCATION DEFECT. If the plugin dies mid-session the JSONL can end
+    # on a clean line boundary, so every line parses and the report looks like
+    # a short-but-complete run. The candidate's oracle test is then simply
+    # absent from `before`, no test goes fail->pass, and the commit books
+    # `rejected:unchanged` -- our crash wearing the shape of a verdict. Only
+    # the terminator's absence can tell the two apart.
+    text = "\n".join(json.dumps(r) for r in (
+        {"kind": "test", "nodeid": "t.py::a", "when": "call",
+         "outcome": "passed", "message": None},
+        {"kind": "test", "nodeid": "t.py::b", "when": "call",
+         "outcome": "failed", "message": "assert 1 == 2"},
+    )) + "\n"
+    try:
+        outcomes.parse_report(text)
+    except ValueError as exc:
+        assert "truncated" in str(exc)
+        return
+    raise AssertionError(
+        "expected ValueError on a report with no sessionfinish record")
+
+
+def test_parse_report_consumes_the_terminator_without_surfacing_it():
+    # The terminator carries no nodeid, so leaking it into either list would
+    # crash Record construction or fabricate a phantom outcome. It must be
+    # consumed silently and the rest of the report parse normally.
+    text = _jsonl(
+        {"kind": "test", "nodeid": "t.py::a", "when": "call",
+         "outcome": "passed", "message": None},
+        {"kind": "collect", "nodeid": "t_bad.py", "when": "collect",
+         "outcome": "failed", "message": "ImportError"},
+    )
+    tests, collect = outcomes.parse_report(text)
+    assert [r.nodeid for r in tests] == ["t.py::a"]
+    assert [r.nodeid for r in collect] == ["t_bad.py"]
+    assert outcomes.collapse(tests) == {"t.py::a": outcomes.PASSED}
 
 
 def test_collapse_call_failure_is_a_failure():

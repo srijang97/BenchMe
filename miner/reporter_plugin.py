@@ -20,6 +20,14 @@ Why a plugin rather than parsing pytest's output:
     pytest-pretty replacing the summary block can no longer blind the miner.
 
 Appends, never truncates: the caller passes a fresh path per run.
+
+The last thing written is a `sessionfinish` record, and `outcomes.parse_report`
+REQUIRES it. Without a terminator a report that stopped mid-session at a clean
+line boundary parses as a smaller-but-valid set of outcomes, the candidate's
+oracle test is simply missing from `before`, and the run books
+`rejected:unchanged` -- our crash wearing the shape of a verdict about the
+commit. The terminator makes "the session ran to the end" a checkable fact
+rather than an assumption.
 """
 import json
 import os
@@ -52,3 +60,11 @@ def pytest_collectreport(report):
     if report.outcome == "failed":
         _emit({"kind": "collect", "nodeid": report.nodeid, "when": "collect",
                "outcome": "failed", "message": _message(report)})
+
+
+def pytest_sessionfinish(session, exitstatus):
+    # The terminator. Its ABSENCE is the signal -- see the module docstring
+    # and outcomes.parse_report. int() because pytest passes an ExitCode enum
+    # on modern versions and a bare int on older ones, and json.dumps of an
+    # IntEnum is version-dependent noise we do not want in the report.
+    _emit({"kind": "sessionfinish", "exitstatus": int(exitstatus)})

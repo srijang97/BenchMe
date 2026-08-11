@@ -320,7 +320,7 @@ def build_quarter_image(repo, quarter, log_dir):
                            cwd=str(repo), capture_output=True, text=True)
 
 
-REPORTER_DIR = "/opt/benchme"
+REPORTER_DIR = "/work/.benchme"
 # The plugin's module name and the variable it reads its output path from.
 # These live here rather than in outcomes.py because they are facts about
 # INSTALLING the plugin; outcomes.py only parses what it writes and stays free
@@ -332,31 +332,33 @@ REPORT_ENV = "BENCHME_REPORT"
 def install_reporter(container):
     """Write the pytest reporter plugin into a running container.
 
-    Once per container, not per candidate. Lives outside the checkout so it
-    cannot be collected as a test, cannot appear in `git status` inside the
-    workdir, and survives the workdir being deleted between candidates.
+    Once per container, not per candidate.
+
+    It lives at REPORTER_DIR -- `/work/.benchme` -- which is a SIBLING of the
+    per-candidate workdirs (`/work/<sha12>`), not a child of one. That single
+    choice buys every property this needs at once: it is outside the checkout,
+    so pytest cannot collect it as a test and it cannot appear in `git status`
+    inside the workdir; and being a sibling, it survives
+    `rm -rf /work/<sha12>` between candidates.
+
+    `/work` is the one directory the image hands to the container's own user:
+    the Dockerfile template above does `RUN mkdir -p /work && chown {user}
+    /work`, so uid 1000 owns it outright and this exec needs no privilege
+    escalation. That matters -- the container deliberately runs unprivileged
+    so that no permission bug in a candidate's test can be masked by root, and
+    an earlier silent-failure incident in this codebase is the reason that
+    invariant is worth defending rather than working around.
 
     Written as BYTES for the same reason runner._apply is: subprocess wraps a
     text-mode stdin in a TextIOWrapper with newline=None, which on Windows
     turns every "\\n" into "\\r\\n". A CRLF Python file still imports, but the
     same defect silently corrupted patch application twice before, so the
     habit is worth keeping.
-
-    Written as ROOT (`--user 0:0`), the one place stage 2 needs it. The
-    container itself runs as tierb.DEFAULT_CONTAINER_USER (1000:1000), and
-    /opt in python:3.12-slim is root-owned 755, so the mkdir would fail with
-    "Permission denied" for every quarter -- SystemExit before a single
-    candidate ran. Only this one file is placed as root; the resulting 755
-    directory and 644 file are readable by uid 1000, which is all `-p
-    benchme_reporter` needs, and pytest still runs unprivileged. Escalating
-    here rather than relaxing the container's user keeps the property tierb
-    cares about: no TEST ever runs as root, so no permission bug can be
-    masked.
     """
     source = (Path(__file__).resolve().parent / "reporter_plugin.py").read_bytes()
     target = f"{REPORTER_DIR}/{PLUGIN_MODULE}.py"
     proc = subprocess.run(
-        ["docker", "exec", "-i", "--user", "0:0", container, "sh", "-c",
+        ["docker", "exec", "-i", container, "sh", "-c",
          f"mkdir -p {REPORTER_DIR} && cat > {target}"],
         input=source, capture_output=True, env=tierb.docker_env())
     if proc.returncode != 0:

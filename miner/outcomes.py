@@ -41,12 +41,23 @@ class Record(NamedTuple):
 def parse_report(text):
     """(test_records, collect_error_records) from the reporter's JSONL.
 
-    Raises ValueError on a malformed line. A partial or interleaved write is
-    OUR failure; skipping the line would silently shrink the outcome set,
-    which downstream reads as "this commit changed nothing" -- apparatus
-    wearing the shape of a verdict.
+    INVARIANT: the report must end with the reporter's `sessionfinish` record.
+    That record is consumed here -- it is never returned as a test or a
+    collect record -- and its ABSENCE raises ValueError.
+
+    Two failures are therefore caught, and both are OURS, never a verdict
+    about the commit:
+
+      * a malformed line -- a partial or interleaved write. Skipping it would
+        silently shrink the outcome set.
+      * a missing terminator -- the plugin died mid-session. A report cut at a
+        clean line boundary is perfectly valid JSONL, so nothing else can tell
+        it from a short-but-complete run. The candidate's oracle test would
+        simply be absent from `before` and the run would book
+        `rejected:unchanged`: apparatus wearing the shape of a verdict.
     """
     tests, collect = [], []
+    finished = False
     for lineno, line in enumerate(text.splitlines(), start=1):
         line = line.strip()
         if not line:
@@ -57,9 +68,17 @@ def parse_report(text):
             raise ValueError(
                 f"reporter line {lineno} is not valid JSON ({exc}); the "
                 f"report was truncated or interleaved: {line[:120]!r}") from exc
+        if raw.get("kind") == "sessionfinish":
+            finished = True
+            continue
         rec = Record(raw["nodeid"], raw["when"], raw["outcome"],
                      raw.get("message"))
         (collect if raw.get("kind") == "collect" else tests).append(rec)
+    if not finished:
+        raise ValueError(
+            f"reporter report is truncated: no sessionfinish record, so the "
+            f"pytest session did not run to the end "
+            f"({len(tests)} test and {len(collect)} collect records read)")
     return tests, collect
 
 
