@@ -1282,6 +1282,25 @@ Remove the base-negative-class portion of `_rejections` and its
 all still real. Update the docstring to say why the base-negative breakdown was
 removed and point at the round 2 synthesis.
 
+`report.py` also carries four prose references to functions deleted in Task 4.
+All four are in docstrings or report-string literals — `report.py` does not
+import `validate` — so nothing is functionally broken, but each now names code
+that no longer exists and would mislead the next reader. Fix all four:
+
+| line | context | what it references |
+|---|---|---|
+| ~19 | module docstring | `validate.classify` |
+| ~216 | `_rejections` report string | `validate.classify`'s `other:` fallthrough |
+| ~223 | `_rejections` report string | `validate.classify` |
+| ~321 | `_regressions` docstring | `validate.diff_outcomes` |
+
+Lines 216 and 223 disappear with the base-negative breakdown above. For the
+module docstring and `_regressions`, point at `outcomes.label` and
+`outcomes.diff` respectively. `_regressions` in particular must now describe
+the *new* behaviour: a node id that passed before and is absent after is
+`renamed` when the exact-swap rule holds and `broken` otherwise — it is no
+longer unconditionally booked as broken.
+
 - [ ] **Step 3c: Update the status vocabulary in `record.py`**
 
 `miner/record.py`'s module docstring describes `validated` as "fail-to-pass
