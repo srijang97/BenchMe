@@ -86,6 +86,7 @@ QuarterImage = namedtuple("QuarterImage",
 
 REASON_OK = "ok"
 REASON_NO_COMMITS = "no-commits-in-quarter"
+REASON_BAD_QUARTER = "malformed-quarter"
 REASON_GIT_FAILED = "git-log-failed"
 REASON_WORKTREE_FAILED = "worktree-add-failed"
 REASON_BUILD_FAILED = "docker-build-failed"
@@ -177,11 +178,16 @@ def build_quarter_image(repo, quarter, log_dir):
     worktree_added = False
 
     def finish(tag, reason, anchored=False, skip=False):
-        log.insert(0, f"quarter={quarter} anchor={sha} "
+        log.insert(0, f"quarter={quarter!r} anchor={sha} "
                       f"reason={reason} anchored={anchored} skip={skip}")
+        # The quarter reaches this path unvalidated, so it cannot be trusted
+        # as a filename: it may be None, empty, or carry separators that would
+        # write the log outside log_dir entirely -- losing the very forensics
+        # this function exists to guarantee.
+        stem = re.sub(r"[^0-9A-Za-z._-]", "_", str(quarter))[:64] or "unknown"
         try:
             log_dir.mkdir(parents=True, exist_ok=True)
-            (log_dir / f"build-{quarter}.log").write_text(
+            (log_dir / f"build-{stem}.log").write_text(
                 "\n".join(log), encoding="utf-8")
         except OSError as exc:  # logging must never mask the real outcome
             print(f"warning: could not write build log: {exc}",
@@ -191,6 +197,13 @@ def build_quarter_image(repo, quarter, log_dir):
     try:
         try:
             sha = anchor_commit(repo, quarter)
+        except ValueError as exc:
+            # anchor_commit is right to raise -- validation belongs there. But
+            # this wrapper promises a QuarterImage and a log on every path, and
+            # a contract the code does not honour is worse than none, because
+            # the caller stops defending against it.
+            log.append(str(exc))
+            return finish(None, REASON_BAD_QUARTER)
         except RuntimeError as exc:
             log.append(str(exc))
             return finish(None, REASON_GIT_FAILED)
