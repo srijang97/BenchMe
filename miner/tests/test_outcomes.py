@@ -78,3 +78,69 @@ def test_collapse_records_passed_and_skipped():
             outcomes.Record("t.py::b", "call", "skipped", "needs network")]
     assert outcomes.collapse(recs) == {"t.py::a": outcomes.PASSED,
                                        "t.py::b": outcomes.SKIPPED}
+
+
+def test_label_bare_assert():
+    assert outcomes.label("assert 1 == 2") == "assertion"
+
+
+def test_label_named_assertion_error():
+    assert outcomes.label("AssertionError: values differ") == "assertion"
+
+
+def test_label_pytest_expectation_protocol():
+    # Round 1 rejected all three of these as `other:unparsed`. They were half
+    # of the classified f2p tests in the first batch. They are pytest's own
+    # idiom for "the expected thing did not happen".
+    assert outcomes.label(
+        "Failed: DID NOT RAISE <class 'ValueError'>") == "expectation"
+    assert outcomes.label(
+        "Failed: DID NOT WARN. No warnings of type (<class 'X'>,) were "
+        "emitted.") == "expectation"
+    assert outcomes.label("Failed: nope") == "expectation"
+
+
+def test_label_missing_api_family():
+    assert outcomes.label(
+        "AttributeError: module 'json' has no attribute 'z'") == "missing_api"
+    assert outcomes.label(
+        "ModuleNotFoundError: No module named 'x'") == "missing_api"
+    assert outcomes.label("ImportError: cannot import name 'y'") == "missing_api"
+    assert outcomes.label("NameError: name 'q' is not defined") == "missing_api"
+
+
+def test_label_type_error_is_its_own_bucket():
+    # Kept separate from missing_api: a changed signature is not the same
+    # claim as an absent attribute, and round 1 explicitly left this open.
+    assert outcomes.label("TypeError: f() takes 1 arg") == "type_error"
+
+
+def test_label_dotted_library_exception_keeps_the_leaf_name():
+    assert outcomes.label(
+        "pydantic_core._pydantic_core.ValidationError: 1 validation error "
+        "for Model") == "exception:ValidationError"
+
+
+def test_label_library_warning_class_without_an_error_suffix():
+    # PydanticDeprecatedSince20 ends in neither Error nor Exception nor
+    # Warning. Matching on a suffix would drop it to unlabelled; matching on
+    # "dotted identifier followed by a colon" keeps it.
+    assert outcomes.label(
+        "pydantic.warnings.PydanticDeprecatedSince20: The `__fields__` "
+        "attribute is deprecated") == "exception:PydanticDeprecatedSince20"
+
+
+def test_label_unrecognised_message_is_unlabelled_not_an_error():
+    assert outcomes.label("something we have never seen") == "unlabelled"
+    assert outcomes.label(None) == "unlabelled"
+    assert outcomes.label("") == "unlabelled"
+
+
+def test_unlabelled_is_not_a_rejection_signal():
+    # Guards the council's central decision against a future "tidy-up" that
+    # reintroduces a qualifying-class check. If someone adds a set of
+    # acceptable labels, this test should make them think twice.
+    for message in ["assert x", "Failed: nope", "AttributeError: nope",
+                    "TypeError: nope", "Zzz.Qqq: nope", "gibberish", None]:
+        assert isinstance(outcomes.label(message), str)
+        assert outcomes.label(message) != ""

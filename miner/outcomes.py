@@ -16,6 +16,7 @@ assertions never executed against the unfixed code, so a later pass proves
 nothing about whether they detect the bug.
 """
 import json
+import re
 from typing import NamedTuple
 
 FAILURE = "failure"   # ran, expectation not met -- admissible
@@ -85,3 +86,53 @@ def collapse(records):
         else:
             status[rec.nodeid] = PASSED
     return status
+
+
+# "Name: message" where Name is a possibly-dotted Python identifier. Matching
+# the identifier-plus-colon shape rather than an Error/Exception/Warning
+# suffix is deliberate: pydantic's PydanticDeprecatedSince20 carries none of
+# those suffixes, and a suffix rule would drop it to `unlabelled`.
+_EXC = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_.]*): ")
+
+MISSING_API = {"AttributeError", "ImportError", "ModuleNotFoundError",
+               "NameError"}
+
+
+def label(message):
+    """A description of how a test failed. NEVER a judgement about whether the
+    candidate qualifies.
+
+    Round 1 required an assertion-class base negative and rejected everything
+    else. Round 2 retired that rule: fail-to-pass against the genuine upstream
+    fix already establishes that the failure was caused by the missing fix, so
+    the exception's name adds nothing about validity. It is still worth
+    recording, because corpus composition is a reported property and because a
+    later audit may find a label that predicts a weak oracle. Until such an
+    audit exists, no label gates.
+
+    `unlabelled` therefore means "our parser did not recognise this message",
+    which is a fact about us. It must never become a rejection -- that is
+    exactly the `other:unparsed` defect that cost half the first batch.
+    """
+    if not message:
+        return "unlabelled"
+    text = message.strip()
+    if text.startswith("assert"):
+        return "assertion"
+    match = _EXC.match(text)
+    if not match:
+        return "unlabelled"
+    name = match.group("name").rsplit(".", 1)[-1]
+    if name == "AssertionError":
+        return "assertion"
+    # pytest raises _pytest.outcomes.Failed for pytest.fail(), for
+    # pytest.raises that did not raise, and for pytest.warns that did not
+    # warn. All three surface as "Failed: ...". Framework-level, so this
+    # holds for every pytest project, not just pydantic.
+    if name == "Failed":
+        return "expectation"
+    if name in MISSING_API:
+        return "missing_api"
+    if name == "TypeError":
+        return "type_error"
+    return f"exception:{name}"
