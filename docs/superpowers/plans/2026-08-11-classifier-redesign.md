@@ -840,8 +840,11 @@ failure kind.
 - Consumes: `outcomes.parse_report`, `outcomes.collapse`, `outcomes.diff`,
   `outcomes.label`, `outcomes.PLUGIN_MODULE`, `outcomes.REPORT_ENV`.
 - Produces: `quarters.install_reporter(container) -> str | None` returning an
-  error string or None; `runner._pytest(...)` returning
-  `(status_map, collect_errors, log_text)`.
+  error string or None; `runner._pytest(...)` returning the 4-tuple
+  `(status_map, records, collect_errors, log_text)` where `records` is the
+  `list[outcomes.Record]` of test records, kept because the labelling step
+  needs each f2p node's message and re-running pytest to get it would be
+  absurd.
 
 - [ ] **Step 1: Add `install_reporter` to `miner/quarters.py`**
 
@@ -916,9 +919,12 @@ Replace the whole `_pytest` function with:
 
 ```python
 def _pytest(container, workdir, targets, log_path, phase, timeout=1800):
-    """Run pytest on `targets`; return (status_map, collect_errors, output).
+    """Run pytest on `targets`; return
+    (status_map, records, collect_errors, output).
 
     `status_map` is node id -> one of outcomes.FAILURE/ERROR/PASSED/SKIPPED.
+    `records` is the raw list of outcomes.Record, kept because labelling needs
+    each failing node's message and the collapsed map does not carry it.
     Raises ValueError (from outcomes.parse_report) when the report is
     malformed; the caller books that as apparatus.
 
@@ -955,7 +961,7 @@ def _pytest(container, workdir, targets, log_path, phase, timeout=1800):
             f"reporter wrote nothing for the {phase} run (rc={rr.returncode}); "
             f"pytest exited {r.returncode}: {out[-300:]}")
     tests, collect = outcomes.parse_report(rr.stdout)
-    return outcomes.collapse(tests), collect, out
+    return outcomes.collapse(tests), tests, collect, out
 ```
 
 Add `import outcomes` to the imports in `miner/runner.py`.
@@ -978,7 +984,7 @@ function with:
 
 ```python
     try:
-        before, before_collect, _ = _pytest(
+        before, before_records, before_collect, _ = _pytest(
             container, workdir, targets, logs / f"{BEFORE}.log", BEFORE)
     except ValueError as exc:
         out.update(status="apparatus", reason=f"before report: {exc}"[:300])
@@ -999,7 +1005,7 @@ function with:
         return out
 
     try:
-        after, after_collect, _ = _pytest(
+        after, _after_records, after_collect, _ = _pytest(
             container, workdir, targets, logs / f"{AFTER}.log", AFTER)
     except ValueError as exc:
         out.update(status="apparatus", reason=f"after report: {exc}"[:300])
@@ -1043,8 +1049,9 @@ function with:
     # fix. A node id with no reporter message still gets a label
     # ("unlabelled") rather than being rejected or defaulted to a qualifying
     # class -- see outcomes.label.
-    messages = {r.nodeid: r.message for r in
-                [rec for rec in _before_records] if r.nodeid in d["f2p"]}
+    f2p_set = set(d["f2p"])
+    messages = {r.nodeid: r.message for r in before_records
+                if r.nodeid in f2p_set}
     out["failure_labels"] = {t: outcomes.label(messages.get(t))
                              for t in d["f2p"]}
 
@@ -1058,20 +1065,9 @@ function with:
     return out
 ```
 
-**Note for the implementer:** the `messages` line above references
-`_before_records`, which does not exist yet. `_pytest` currently returns a
-collapsed status map and discards the per-record messages. Change `_pytest` to
-return the test records as a fourth element — `(status_map, collect_errors,
-records, output)` — thread it through both call sites, and build `messages`
-from the before-run records directly:
-
-```python
-    messages = {r.nodeid: r.message for r in before_records
-                if r.nodeid in set(d["f2p"])}
-```
-
-Update the `Produces` interface note accordingly. Do not fake this with a
-second pytest run.
+**Note for the implementer:** `_pytest` returns a 4-tuple. The after-run's
+records are unused, hence the `_after_records` name — do not delete the
+element to make the tuple shorter on one branch and not the other.
 
 - [ ] **Step 6: Verify no gate on failure kind survives**
 
@@ -1383,13 +1379,11 @@ Task 2; 2 → Tasks 1 and 3; 5 → Tasks 1, 4, 5; 6 → Task 3; 7 → Task 6; 8 
 5; 9 → not miner work; 10 and 11 → explicitly out of scope, stated above; 12
 and 13 → Task 6. Decision 14 requires no change.
 
-**Known rough edge, flagged rather than hidden.** Task 5 Step 5 initially
-writes a `messages` expression that references a name `_before_records` which
-does not exist, then instructs the implementer to change `_pytest`'s return
-signature to supply it. That is deliberate — it is the one place where the
-required change is a signature change rippling through two call sites, and
-burying it would produce a subtly broken implementation. The implementer must
-do the signature change, not paper over it.
+**Signature change, called out because it ripples.** `_pytest` grows from a
+3-tuple to a 4-tuple in Task 5 so the labelling step can reach each failing
+node's message. Both call sites in `_measure` unpack four values. The
+after-run's records are deliberately bound to `_after_records` rather than
+dropped, so the two call sites stay visibly symmetric.
 
 **Type consistency.** `outcomes.diff` returns the five keys `f2p`, `p2p`,
 `broken`, `renamed`, `error_base` in Task 3 and every consumer in Tasks 5 and 6
