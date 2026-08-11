@@ -288,24 +288,40 @@ def check_pass2_determinism(pass1_f2p, before, f2p_now):
     and no I/O -- because `_measure` cannot be tested without Docker and this
     decision is the part that must not regress. See miner/tests/test_runner.py.
 
-    `pass1_f2p` is pass 1's oracle, `before` is pass 2's before-run status map
-    (only membership is read), `f2p_now` is pass 2's own fail->pass list.
+    `pass1_f2p` is pass 1's oracle, `before` is pass 2's before-run status map,
+    `f2p_now` is pass 2's own fail->pass list.
 
     The order of the three tests is the contract:
 
       1. no `pass1_f2p` at all -> PASS2_ERROR. A programming error, reported as
          itself rather than smuggled into apparatus.
-      2. an oracle node absent from `before` -> PASS2_APPARATUS. It was never
-         measured, so nothing can be concluded about it -- "measured and did
-         not flip" is a fact about the commit, "never measured" is a fact about
-         us. Checked before reproduction so a never-measured node cannot fall
-         through into it.
+      2. an oracle node that pass 2 did not actually measure -> PASS2_APPARATUS.
+         Nothing can be concluded about it -- "measured and did not flip" is a
+         fact about the commit, "not measured" is a fact about us. Checked
+         before reproduction so an unmeasured node cannot fall through into it.
+
+         Two things count as not measured, and only these two:
+
+           * absence from `before` -- a collection error in the full suite
+             dropped the node, or pass 2's selection never reached it.
+           * a before status of outcomes.SKIPPED -- the node was collected but
+             the body never ran (a marker, an environment gate, a skipif that
+             is true in this image). A skip is a SELECTION artefact, exactly
+             like absence: the test did not execute, so it cannot have flipped,
+             and booking `rejected:unstable` off it would state a verdict about
+             the commit on the strength of something the commit did not cause.
+
+         Every other status IS a measurement, including PASSED: a node that
+         passed in pass 2's before run genuinely ran and genuinely did not
+         start from a failure.
       3. every node measured, none flipped -> PASS2_UNSTABLE; otherwise
          PASS2_REPRODUCED with the intersection.
     """
     if not pass1_f2p:
         return Pass2Check(PASS2_ERROR, [], [])
-    never_measured = sorted(t for t in pass1_f2p if t not in before)
+    never_measured = sorted(t for t in pass1_f2p
+                            if before.get(t) is None
+                            or before.get(t) == outcomes.SKIPPED)
     if never_measured:
         return Pass2Check(PASS2_APPARATUS, never_measured, [])
     now = set(f2p_now)
@@ -313,6 +329,57 @@ def check_pass2_determinism(pass1_f2p, before, f2p_now):
     if not reproduced:
         return Pass2Check(PASS2_UNSTABLE, [], [])
     return Pass2Check(PASS2_REPRODUCED, [], reproduced)
+
+
+def _labels_for(before_records, f2p):
+    """How each fail->pass node failed on the before side.
+
+    LABEL, never gate. Round 1 required an assertion-class base negative;
+    round 2 retired that rule because fail-to-pass against the genuine upstream
+    fix already establishes the failure was caused by the missing fix. A node id
+    with no reporter message still gets a label ("unlabelled") rather than being
+    rejected or defaulted to a qualifying class -- see outcomes.label.
+
+    A function rather than an inline block because two call sites need it: the
+    qualifying path, and the `rejected:unstable` path, which blanks `f2p` and
+    relies on these labels to keep pass 2's raw set recoverable from the record.
+    """
+    wanted = set(f2p)
+    messages = {r.nodeid: r.message for r in before_records
+                if r.nodeid in wanted}
+    return {t: outcomes.label(messages.get(t)) for t in f2p}
+
+
+def _pass2_targets(container, workdir, tests):
+    """(targets, err) for the full-suite pass.
+
+    "tests" alone is NOT enough. Pass 1 points pytest at the touched test files
+    and its oracle can therefore come from any path `metrics.is_test_file`
+    accepts -- and that predicate matches `test_*.py` ANYWHERE in the tree, not
+    only under `tests/`. An oracle node from such a file can never appear in
+    pass 2's before-run map, so the determinism check books it as never
+    measured, which is `apparatus` and TERMINAL: a fixable gap in OUR selection
+    would permanently retire a candidate that may be perfectly good.
+
+    Fixed at the source rather than at the check. The union keeps "tests" -- the
+    full suite still runs, which is what makes pass 2 an independent
+    measurement and what catches a code patch that breaks something elsewhere --
+    and adds the touched test files that live outside it. `_runnable_targets`
+    is reused rather than reimplemented so the conftest, deleted-file and
+    NON_PYTEST_TEST_DIRS filters and the existence probe all still apply, and
+    its probe error is handled exactly as pass 1 handles it.
+    """
+    extra, err = _runnable_targets(container, workdir, tests)
+    if err:
+        return None, err
+    targets = ["tests"]
+    for t in extra:
+        # Anything already under tests/ is covered by the "tests" target;
+        # naming it twice makes pytest collect the file a second time.
+        if PurePosixPath(t).parts[:1] == ("tests",) or t in targets:
+            continue
+        targets.append(t)
+    return targets, None
 
 
 def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
@@ -348,7 +415,10 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
         return out
 
     if pass2:
-        targets = ["tests"]
+        targets, probe_err = _pass2_targets(container, workdir, tests)
+        if probe_err:
+            out.update(status="apparatus", reason=probe_err)
+            return out
     else:
         targets, probe_err = _runnable_targets(container, workdir, tests)
         if probe_err:
@@ -423,20 +493,32 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
     #   apparatus   OUR TOOLING -- it did not measure what the check needs.
     #   rejected:*  a verdict about the COMMIT.
     #
-    # Both pass-2 checks are made BEFORE the `if not d["f2p"]` return below.
+    # ALL of pass 2's arms are decided BEFORE the `if not d["f2p"]` return
+    # below, because that return is the wrong answer for every one of them.
+    #
     # `--continue-on-collection-errors` means a collection error anywhere in
     # the full suite can drop pass-1's oracle nodes from pass 2's results, and
     # when it drops ALL of them d["f2p"] is empty and that return would book
     # `rejected:unchanged`: our tooling's failure wearing a verdict about the
     # commit, which is the precise failure class this redesign exists to
-    # eliminate. Round 1 closed the partial case; this closes the total one.
+    # eliminate. Round 1 closed the partial case; round 2 closed the total one.
+    #
+    # The unstable arm has to come before it too. When pass 2 flips NOTHING AT
+    # ALL -- the common shape of a flaky or selection-dependent oracle --
+    # d["f2p"] is empty and this return fired first, so the record read
+    # `rejected:unchanged, no test went fail->pass`, which is false on its face
+    # for a record whose f2p_pass1 is non-empty: pass 1 saw exactly such a
+    # test. Both are verdicts about the commit, so no discipline was broken,
+    # but the `unstable` row counted only the pass-2 runs that happened to flip
+    # some UNRELATED test, leaving the determinism rejection rate unmeasurable
+    # -- which is the whole point of having the check.
     #
     # Pass 1 carries no pass1_f2p and never enters this block, so it still
     # books `rejected:unchanged` when nothing goes fail->pass -- for pass 1
-    # that is a genuine verdict about the commit and is correct.
-    #
-    # The check is computed ONCE, here, and the unstable arm is branched on
-    # again further down, after labelling.
+    # that is a genuine verdict about the commit and is correct. Reaching
+    # `rejected:unchanged` in PASS 2 now means only what it says: the oracle
+    # reproduced (so the record is past every arm below) and something else
+    # about the diff came up empty.
     check = None
     if pass2:
         check = check_pass2_determinism(pass1_f2p, before, d["f2p"])
@@ -460,10 +542,10 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
         out["f2p_pass1"] = sorted(pass1_f2p)
         out["f2p_reproduced"] = check.reproduced
 
-        # "Measured and did not flip" is not "never measured", and only the
-        # first is a fact about the commit. Absence from pass 2's before-run
-        # status map means the node was never measured, so nothing can be
-        # concluded about it: apparatus, which is ours and terminal.
+        # "Measured and did not flip" is not "not measured", and only the first
+        # is a fact about the commit. A node missing from pass 2's before-run
+        # status map, or present in it as SKIPPED, did not execute, so nothing
+        # can be concluded about it: apparatus, which is ours and terminal.
         if check.kind == PASS2_APPARATUS:
             n_before = len(out.get("before_collect_errors") or [])
             n_after = len(out.get("after_collect_errors") or [])
@@ -471,7 +553,8 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
             out.update(
                 status="apparatus",
                 reason=f"{len(missing)} of {len(pass1_f2p)} pass-1 fail->pass "
-                       f"test(s) were never measured in pass 2, so the "
+                       f"test(s) were not measured in pass 2 (absent from the "
+                       f"before run, or collected but skipped), so the "
                        f"determinism check cannot be made (first: "
                        f"{missing[0]}); pass-2 collection errors: "
                        f"{n_before} before, {n_after} after")
@@ -485,6 +568,49 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
             out["f2p"] = []
             return out
 
+        # Decision 7: the transition must reproduce. Pass 2 is an independent
+        # measurement -- fresh clone, fresh patch, full-suite selection rather
+        # than the touched files -- so an f2p that appears in pass 1 and not
+        # here is either flaky or selection-dependent. Kimi's point in round
+        # 2: flakiness, not taxonomy, is the plausible mechanism by which a
+        # test "passes for unrelated reasons".
+        #
+        # This arm sits ABOVE the `rejected:unchanged` return, not below it:
+        # the commonest unstable shape is pass 2 flipping nothing at all, and
+        # from below this arm was unreachable on exactly that shape. See the
+        # ordering note above.
+        if check.kind == PASS2_UNSTABLE:
+            out.update(
+                status="rejected:unstable",
+                reason=f"all {len(pass1_f2p)} pass-1 fail->pass test(s) were "
+                       f"measured in the full-suite pass-2 run and none "
+                       f"reproduced the fail->pass transition")
+            # Pass 2's own raw f2p set is not an oracle here -- nothing in it
+            # reproduced -- and leaving it in place lets a downstream reader
+            # mistake it for one while `f2p_reproduced` is empty. It stays
+            # recoverable from `failure_labels`, whose keys are that set, which
+            # is why the labels are built here rather than left to the
+            # qualifying path below.
+            out["failure_labels"] = _labels_for(before_records, d["f2p"])
+            out["f2p"] = []
+            return out
+
+        # Pass2Check.kind is CLOSED here. The three arms above have returned,
+        # so only PASS2_REPRODUCED may continue -- and it must say so out loud.
+        # Falling through implicitly would mean a fifth kind added later
+        # reaches `validated` by default, i.e. an unrecognised value defaulting
+        # to the qualifying outcome, which the project's global constraints
+        # forbid. `error`, not apparatus: a kind this function does not
+        # recognise is a miner bug, and `error` is non-terminal so the
+        # candidate is retried once the bug is fixed.
+        if check.kind != PASS2_REPRODUCED:
+            out.update(
+                status="error",
+                reason=f"miner bug: unrecognised pass-2 determinism kind "
+                       f"{check.kind!r}; refusing to book a validated record "
+                       f"on a check outcome this code does not understand")
+            return out
+
     if not d["f2p"]:
         # error_base is spelled out in the reason because it is the one
         # rejection the new contract still makes on failure kind, and it is
@@ -496,41 +622,9 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
         out.update(status="rejected:unchanged", reason=detail)
         return out
 
-    # LABEL, never gate. Round 1 required an assertion-class base negative;
-    # round 2 retired that rule because fail-to-pass against the genuine
-    # upstream fix already establishes the failure was caused by the missing
-    # fix. A node id with no reporter message still gets a label
-    # ("unlabelled") rather than being rejected or defaulted to a qualifying
-    # class -- see outcomes.label.
-    f2p_set = set(d["f2p"])
-    messages = {r.nodeid: r.message for r in before_records
-                if r.nodeid in f2p_set}
-    out["failure_labels"] = {t: outcomes.label(messages.get(t))
-                             for t in d["f2p"]}
+    out["failure_labels"] = _labels_for(before_records, d["f2p"])
 
     if pass2:
-        # Decision 7: the transition must reproduce. Pass 2 is an independent
-        # measurement -- fresh clone, fresh patch, full-suite selection rather
-        # than the touched files -- so an f2p that appears in pass 1 and not
-        # here is either flaky or selection-dependent. Kimi's point in round
-        # 2: flakiness, not taxonomy, is the plausible mechanism by which a
-        # test "passes for unrelated reasons".
-        #
-        # `check` was computed above the `rejected:unchanged` return, and the
-        # error and apparatus arms already returned there. Only the two
-        # verdicts about the COMMIT are left to make here, after labelling.
-        if check.kind == PASS2_UNSTABLE:
-            out.update(
-                status="rejected:unstable",
-                reason=f"all {len(pass1_f2p)} pass-1 fail->pass test(s) were "
-                       f"measured in the full-suite pass-2 run and none "
-                       f"reproduced the fail->pass transition")
-            # Pass 2's own raw f2p set is not an oracle here -- nothing in it
-            # reproduced -- and leaving it in place lets a downstream reader
-            # mistake it for one while `f2p_reproduced` is empty. It stays
-            # recoverable from `failure_labels`, whose keys are that set.
-            out["f2p"] = []
-            return out
         # Every pass-1 oracle node was measured and at least one reproduced.
         # The oracle is the INTERSECTION. A test that only flips in one of the
         # two runs is not something we are willing to grade an agent on. No
