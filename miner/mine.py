@@ -27,8 +27,14 @@ def cmd_enumerate(args):
 
 
 def cmd_validate(args):
-    print("validate not implemented yet", file=sys.stderr)
-    return 1
+    import runner
+
+    counts = runner.validate_quarter(args.quarter, args.limit,
+                                     args.keep_images, args.force)
+    print(f"\n{args.quarter} summary (budget {args.limit}):")
+    for k in sorted(counts):
+        print(f"  {k}: {counts[k]}")
+    return 0
 
 
 def cmd_report(args):

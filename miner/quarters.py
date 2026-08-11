@@ -41,8 +41,34 @@ QUARTER_RE = re.compile(r"^\d{4}Q[1-4]$")
 # pre-53bf2f2 pdm quarters). Dropping `--no-emit-project` too would emit the
 # root project and install pydantic -- silently inverting the first invariant
 # while the build still exits green.
-EXPORT_FROZEN = tierb._EXPORT
-EXPORT_UNFROZEN = tierb._EXPORT.replace("--frozen ", "")
+#
+# The TEST closure, not a nicety. uv's export takes only the default `dev`
+# group, which for pydantic omits `testing-extra` -- so devtools, sqlalchemy
+# and cloudpickle are absent, 709 of the 711 outcomes in tests/test_docs.py
+# come back SKIPPED, and several suites do not collect at all. Measured on
+# 2025Q3: three of the first four candidates recorded `apparatus: no test
+# outcomes parsed`, and the fourth was a verdict reached over a suite that had
+# almost entirely skipped.
+#
+# NOT `--all-groups`, which is what the screener's tierb build uses. Measured
+# on 2025Q3: pydantic's `docs` and `typechecking` groups pull pydantic-settings
+# and pydantic-extra-types, and BOTH DEPEND ON PYDANTIC. Here that resolved to
+# an unsatisfiable set and the build failed loudly, but the failure mode to
+# fear is the other one: on a quarter where it does resolve, pydantic lands in
+# site-packages and the first invariant in this module's docstring is inverted
+# silently. The named groups below are the test groups, and nothing in them
+# depends on pydantic. The `RUN python -c "import pydantic"` guard in the
+# Dockerfile is the backstop if that ever stops being true.
+#
+# `--all-extras` stays: with `--no-emit-project` it contributes the extras'
+# dependencies (email-validator, tzdata -- both needed by the suite) without
+# the root project.
+TEST_GROUPS = ["testing-extra"]
+_GROUPS = " --all-extras" + "".join(f" --group {g}" for g in TEST_GROUPS)
+EXPORT_FROZEN = tierb._EXPORT + _GROUPS
+EXPORT_FROZEN_MIN = tierb._EXPORT
+EXPORT_UNFROZEN = EXPORT_FROZEN.replace("--frozen ", "")
+EXPORT_UNFROZEN_MIN = EXPORT_FROZEN_MIN.replace("--frozen ", "")
 
 # Written inside the image by the export step; read back after the build.
 EXPORT_MODE_PATH = "/opt/miner/export-mode"
@@ -58,20 +84,41 @@ RUN pip install --no-cache-dir uv
 WORKDIR /src
 COPY . /src
 RUN mkdir -p /opt/miner \\
- && ( {export} > /tmp/reqs.txt \\
+ && ( ( {export} > /tmp/reqs.txt || {export_min} > /tmp/reqs.txt ) \\
       && echo {mode_frozen} > {mode_path} ) \\
- || ( {fallback} > /tmp/reqs.txt \\
+ || ( ( {fallback} > /tmp/reqs.txt || {fallback_min} > /tmp/reqs.txt ) \\
       && echo {mode_unfrozen} > {mode_path} )
 RUN uv pip install --system -r /tmp/reqs.txt
 RUN uv pip install --system pytest
 WORKDIR /
 RUN rm -rf /src
+# The first invariant, enforced rather than assumed. If any exported group
+# ever pulls pydantic in transitively (pydantic-settings and
+# pydantic-extra-types both do), the closure would no longer be the quarter's
+# and a stale pydantic would satisfy imports the candidate's own checkout was
+# meant to answer. Fail the build instead.
+#
+# Placed AFTER `rm -rf /src`: run any earlier and the probe imports /src's own
+# pydantic package directory via cwd, which fails the build on every repo.
+RUN if python -c "import pydantic" 2>/dev/null; then \\
+      echo "FATAL: pydantic is in site-packages; the export leaked the project"; \\
+      exit 1; \\
+    fi
 # Docker creates a missing `-w` directory as root, which a non-root container
 # cannot write to. Each candidate's checkout lands here, so it must be owned
 # by the user the container actually runs as.
 RUN mkdir -p /work && chown {user} /work
 WORKDIR /work
 RUN python -m pytest --version
+# Stage 2 clones the host's pydantic checkout from a read-only bind mount at
+# /repo, which a non-root uid does not own, so git refuses it with `fatal:
+# detected dubious ownership`. This is declared SYSTEM-wide rather than via
+# the GIT_CONFIG_* env vars the screener uses, because `git clone` runs
+# upload-pack against the other repository and git strips GIT_CONFIG_COUNT
+# and friends from that child's environment (they are local_repo_env) --
+# measured: rev-parse on /repo succeeded with the env vars set while clone
+# from the same shell still failed.
+RUN git config --system --add safe.directory '*'
 """
 
 # A build result that distinguishes a verdict from an apparatus failure.
@@ -226,7 +273,9 @@ def build_quarter_image(repo, quarter, log_dir):
         dockerfile.write_text(
             DOCKERFILE.format(base=tierb.BASE_IMAGE,
                               export=EXPORT_FROZEN,
+                              export_min=EXPORT_FROZEN_MIN,
                               fallback=EXPORT_UNFROZEN,
+                              fallback_min=EXPORT_UNFROZEN_MIN,
                               mode_frozen=MODE_FROZEN,
                               mode_unfrozen=MODE_UNFROZEN,
                               mode_path=EXPORT_MODE_PATH,
@@ -279,6 +328,14 @@ def start_container(image, name):
          "--memory", MEM, "--memory-swap", MEM, "--cpus", CPUS,
          "--pids-limit", PIDS, "--network", "none",
          "--user", tierb.DEFAULT_CONTAINER_USER,
+         # A bare uid has no home directory in the image, so HOME=/ , which is
+         # not writable; anything wanting a cache (pytest, pip) fails there.
+         # Same redirection the screener's run_in uses, so the environment a
+         # candidate runs in matches the one the repo was screened green in.
+         "-e", "HOME=/tmp", "-e", "XDG_CACHE_HOME=/tmp/.cache",
+         # Read-only: the checkout is the source `_checkout` clones FROM, and
+         # nothing in stage 2 may write to the host's clone.
+         "-v", f"{tierb.host_path(Path(__file__).resolve().parents[1] / 'screener' / 'work' / 'pydantic')}:/repo:ro",
          "-w", "/work", image, "sleep", "infinity"],
         capture_output=True, text=True, env=tierb.docker_env())
     return proc.stdout.strip() if proc.returncode == 0 else None
