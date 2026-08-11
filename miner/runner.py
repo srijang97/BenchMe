@@ -33,43 +33,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "screener"))
 import metrics  # noqa: E402
 import tierb  # noqa: E402
 
+import outcomes  # noqa: E402
 import quarters  # noqa: E402
 import record  # noqa: E402
 import validate  # noqa: E402
 
 BEFORE, AFTER = "before", "after"
 
-# pytest trims its short-summary lines to the terminal width and, when the
-# detail will not fit, omits it entirely -- producing `FAILED nodeid` lines
-# that validate.parse_failures cannot tell apart from a genuinely detail-less
-# line, and now raises on. CI=1 makes _pytest.config.running_on_ci() true,
-# which disables the trimming outright; a wide COLUMNS covers the same ground
-# for any pytest that predates that check. Both are set: without them
-# classification degrades silently and the yield numbers become meaningless.
-PYTEST_ENV = {"COLUMNS": "200", "CI": "1"}
-
-# pytest-pretty is in pydantic's own dev group, so it is installed in every
-# quarter image and active by default. It REPLACES the "short test summary
-# info" block with a rich table:
+# The reporter plugin reads its destination from this variable; the runner
+# passes a distinct path per phase so the two runs cannot append to one file.
 #
-#       Summary of Failures
-#   ┏━━━━━━━━┳━━━━━━━━━━┳ ...
-#   │ test_x │ test_a   │ ...
+# COLUMNS/CI are gone: they existed only to stop pytest truncating the
+# short-summary detail to terminal width. The reporter takes its message from
+# report.longrepr.reprcrash, which is never truncated -- verified against
+# pytest 8.3.4, including under the --tb=no already in tierb.PYTEST_ARGV.
 #
-# There is no `FAILED nodeid - detail` line left for validate.parse_failures
-# to read, so it returns {} and every f2p node id falls to its
-# "AssertionError" default -- which classify() calls `assertion`, the one
-# class that QUALIFIES. A missing_api or structural base negative would be
-# admitted as valid, silently, with nothing anywhere in the record or the log
-# to show it. Measured in the 2025Q3 image; the outcome lines survive, so
-# parse_outcomes still works and nothing else looks wrong.
+# `-p no:pretty` is also gone as a correctness measure. pytest-pretty replaced
+# the summary block, which used to blind the old parser completely; the
+# reporter hooks pytest_runtest_logreport and is indifferent to whatever the
+# terminal reporter does.
 #
-# `-rfE` rather than `-rf`: validate.parse_failures reads pytest's ERROR
-# short-summary lines too (collection and fixture errors), and those only
-# appear with E requested. They cannot become a false verdict -- only f2p node
-# ids are ever looked up in that mapping -- but their absence from the log
-# hides the commonest explanation for a zero-outcome run.
-PYTEST_EXTRA = ["-p", "no:pretty", "-rfE"]
+# `--continue-on-collection-errors` is load-bearing. Measured: with one broken
+# import present, a 20-test run reported 1 test -- a single collection error
+# aborts the whole session, so an unrelated bad file silently zeroes a
+# candidate's outcomes and it books as apparatus or `rejected:unchanged`.
+PYTEST_EXTRA = ["--continue-on-collection-errors"]
 
 
 class ContainerLost(Exception):
@@ -135,16 +123,28 @@ def _apply(container, workdir, patch_text, label):
     return None
 
 
-def _pytest(container, workdir, targets, log_path, timeout=1800):
-    """Run pytest on `targets` inside `workdir`; always write the full log.
+def _pytest(container, workdir, targets, log_path, phase, timeout=1800):
+    """Run pytest on `targets`; return
+    (status_map, records, collect_errors, output).
+
+    `status_map` is node id -> one of outcomes.FAILURE/ERROR/PASSED/SKIPPED.
+    `records` is the raw list of outcomes.Record, kept because labelling needs
+    each failing node's message and the collapsed map does not carry it.
+    Raises ValueError (from outcomes.parse_report) when the report is
+    malformed; the caller books that as apparatus.
 
     The checkout goes on PYTHONPATH because the image deliberately does NOT
-    contain the project itself -- see quarters' module docstring.
+    contain the project itself -- see quarters' module docstring. The reporter
+    directory goes on PYTHONPATH too, so `-p benchme_reporter` can import it.
     """
-    env = " ".join(f"{k}={v}" for k, v in PYTEST_ENV.items())
+    report_path = f"/tmp/benchme-{phase}-{Path(workdir).name}.jsonl"
     wd = shlex.quote(workdir)
-    cmd = "cd {wd} && {env} PYTHONPATH={wd} {argv} {t} 2>&1".format(
-        wd=wd, env=env,
+    cmd = (
+        "cd {wd} && rm -f {rp} && {env}={rp} PYTHONPATH={rd}:{wd} "
+        "{argv} -p {plugin} {t} 2>&1"
+    ).format(
+        wd=wd, rp=shlex.quote(report_path), env=quarters.REPORT_ENV,
+        rd=quarters.REPORTER_DIR, plugin=quarters.PLUGIN_MODULE,
         argv=" ".join([*tierb.PYTEST_ARGV, *PYTEST_EXTRA]),
         t=" ".join(shlex.quote(t) for t in targets))
     r = _guard(quarters.exec_in(container, ["sh", "-c", cmd], timeout=timeout),
@@ -152,7 +152,21 @@ def _pytest(container, workdir, targets, log_path, timeout=1800):
     out = r.stdout + r.stderr
     Path(log_path).parent.mkdir(parents=True, exist_ok=True)
     Path(log_path).write_text(f"$ {cmd}\n{out}", encoding="utf-8")
-    return out
+
+    # Read the report as a SEPARATE exec. Interleaving it into the pytest
+    # command would mix it with pytest's own stdout, which is exactly the
+    # coupling this redesign removes.
+    rr = _guard(quarters.exec_in(container, ["cat", report_path]),
+                "read report")
+    if rr.returncode != 0:
+        # An empty or absent report is indistinguishable from "no tests ran"
+        # to every downstream check, so it must surface here rather than
+        # become `rejected:unchanged`.
+        raise ValueError(
+            f"reporter wrote nothing for the {phase} run (rc={rr.returncode}); "
+            f"pytest exited {r.returncode}: {out[-300:]}")
+    tests, collect = outcomes.parse_report(rr.stdout)
+    return outcomes.collapse(tests), tests, collect, out
 
 
 def _runnable_targets(container, workdir, tests):
@@ -240,10 +254,10 @@ def _measure(container, cand, repo, out, workdir, pass2):
         return out
 
     # validate.make_patch raises when a non-empty pathspec yields an empty
-    # diff, and parse_failures raises on a truncated FAILED line. Both mean
-    # OUR capture is wrong, so both are apparatus -- never a verdict about the
-    # commit. Anything else escaping is a miner bug and is booked as `error`
-    # by validate_quarter.
+    # diff, and outcomes.parse_report raises on a truncated or interleaved
+    # reporter line. Both mean OUR capture is wrong, so both are apparatus --
+    # never a verdict about the commit. Anything else escaping is a miner bug
+    # and is booked as `error` by validate_quarter.
     try:
         test_patch = validate.make_patch(repo, parent, sha, tests)
         code_patch = validate.make_patch(repo, parent, sha, code)
@@ -269,85 +283,83 @@ def _measure(container, cand, repo, out, workdir, pass2):
                               "paths after the test patch")
             return out
 
-    before_out = _pytest(container, workdir, targets, logs / f"{BEFORE}.log")
-    before = tierb.parse_outcomes(before_out)
+    try:
+        before, before_records, before_collect, _ = _pytest(
+            container, workdir, targets, logs / f"{BEFORE}.log", BEFORE)
+    except ValueError as exc:
+        out.update(status="apparatus", reason=f"before report: {exc}"[:300])
+        return out
     # Recorded on every candidate that got a before run, because it is the
     # only way to audit a `rejected:unchanged` afterwards. The image is
     # anchored to the lockfile at the quarter's LAST commit, so a candidate
     # from mid-quarter can see hundreds of failures that have nothing to do
     # with it (measured: 840 of 6437 on 2025Q3, from a pydantic-core version
-    # skew). If the candidate's own oracle test is among them it fails on both
-    # sides, never becomes f2p, and is rejected -- a drift artefact wearing
-    # the shape of a verdict. `anchored` does not catch this: it is true and
-    # the environment is still wrong for the commit.
-    out["before_failed"] = sum(1 for v in before.values() if v == "FAILED")
-    try:
-        failures = validate.parse_failures(before_out)
-    except RuntimeError as exc:
-        out.update(status="apparatus", reason=f"parse_failures: {exc}"[:300])
-        return out
+    # skew).
+    out["before_failed"] = sum(1 for v in before.values()
+                               if v == outcomes.FAILURE)
+    out["before_collect_errors"] = [r.nodeid for r in before_collect]
 
     err = _apply(container, workdir, code_patch, "code")
     if err:
         out.update(status="apparatus", reason=err)
         return out
 
-    after_out = _pytest(container, workdir, targets, logs / f"{AFTER}.log")
-    after = tierb.parse_outcomes(after_out)
-
-    diff = validate.diff_outcomes(before, after)
-    out["f2p"] = diff["f2p"]
-    out["p2p_count"] = len(diff["p2p"])
-    out["broken"] = diff["broken"]
-    out["tests_seen"] = len(before)
+    try:
+        after, _after_records, after_collect, _ = _pytest(
+            container, workdir, targets, logs / f"{AFTER}.log", AFTER)
+    except ValueError as exc:
+        out.update(status="apparatus", reason=f"after report: {exc}"[:300])
+        return out
+    out["after_collect_errors"] = [r.nodeid for r in after_collect]
 
     if not before:
         out.update(status="apparatus",
-                   reason="no test outcomes parsed on the before side")
+                   reason="no test outcomes on the before side")
         return out
-    # The after side needs the same guard. An empty after -- a collection
-    # crash the code patch caused, a container hiccup -- makes every f2p
+    # The after side needs the same guard. An empty after makes every f2p
     # comparison fail, so diff["f2p"] is empty and the next branch books
     # `rejected:unchanged`: apparatus wearing a verdict.
     if not after:
         out.update(status="apparatus",
-                   reason="no test outcomes parsed on the after side")
-        return out
-    if not diff["f2p"]:
-        out.update(status="rejected:unchanged",
-                   reason="no test went fail->pass")
+                   reason="no test outcomes on the after side")
         return out
 
-    # NEVER default a missing node id to AssertionError. Task 4 rebuilt
-    # parse_failures so that an unparseable detail becomes "unparsed" and is
-    # rejected; `failures.get(t, "AssertionError")` would restore that default
-    # at the call site, and AssertionError is the one class that QUALIFIES a
-    # candidate. `-p no:pretty` removed the one plugin known to delete the
-    # short-summary block, but the hole is structural: any future reporter
-    # change, plugin or truncated log would leave an f2p node id absent from
-    # `failures` and admit it as `assertion` with nothing to show for it.
-    # Silently rejecting a valid candidate only shrinks the corpus; silently
-    # admitting an invalid one corrupts every number downstream.
-    missing = [t for t in diff["f2p"] if t not in failures]
-    if missing:
-        out.update(status="apparatus",
-                   reason=f"no short-summary line for {len(missing)} of "
-                          f"{len(diff['f2p'])} f2p node id(s), first "
-                          f"{missing[0]!r}; the failure detail pytest printed "
-                          f"was not captured")
+    d = outcomes.diff(before, after)
+    out["f2p"] = d["f2p"]
+    out["p2p_count"] = len(d["p2p"])
+    out["broken"] = d["broken"]
+    out["renamed"] = d["renamed"]
+    out["error_base"] = d["error_base"]
+    out["skipped_after"] = d["skipped_after"]
+    out["tests_seen"] = len(before)
+
+    if not d["f2p"]:
+        # error_base is spelled out in the reason because it is the one
+        # rejection the new contract still makes on failure kind, and it is
+        # the number a future audit of decision 2 will need.
+        detail = "no test went fail->pass"
+        if d["error_base"]:
+            detail += (f"; {len(d['error_base'])} test(s) went error->pass, "
+                       f"which is not an admissible base negative")
+        out.update(status="rejected:unchanged", reason=detail)
         return out
 
-    classes = {t: validate.classify(failures[t]) for t in diff["f2p"]}
-    out["failure_classes"] = classes
-    if not any(c == "assertion" for c in classes.values()):
-        dominant = sorted(classes.values())[0]
-        out.update(status=f"rejected:{dominant.split(':')[0]}",
-                   reason=f"no assertion-class base negative; saw {sorted(set(classes.values()))}")
-        return out
+    # LABEL, never gate. Round 1 required an assertion-class base negative;
+    # round 2 retired that rule because fail-to-pass against the genuine
+    # upstream fix already establishes the failure was caused by the missing
+    # fix. A node id with no reporter message still gets a label
+    # ("unlabelled") rather than being rejected or defaulted to a qualifying
+    # class -- see outcomes.label.
+    f2p_set = set(d["f2p"])
+    messages = {r.nodeid: r.message for r in before_records
+                if r.nodeid in f2p_set}
+    out["failure_labels"] = {t: outcomes.label(messages.get(t))
+                             for t in d["f2p"]}
 
-    if pass2 and diff["broken"]:
+    if pass2 and d["broken"]:
         out.update(status="rejected:regression_broken",
-                   reason=f"{len(diff['broken'])} previously-passing tests fail after the code patch")
+                   reason=f"{len(d['broken'])} previously-passing tests fail "
+                          f"after the code patch")
         return out
 
     out.update(status="validated" if pass2 else "pass1_ok", reason=None)
@@ -392,6 +404,11 @@ def validate_quarter(quarter, limit, keep_images, force):
     cid = quarters.start_container(img.tag, f"miner-{quarter.lower()}")
     if not cid:
         raise SystemExit(f"container would not start for {quarter}")
+
+    err = quarters.install_reporter(cid)
+    if err:
+        quarters.stop_container(cid)
+        raise SystemExit(f"{quarter}: {err}")
 
     counts = {}
     try:

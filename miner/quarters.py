@@ -320,6 +320,50 @@ def build_quarter_image(repo, quarter, log_dir):
                            cwd=str(repo), capture_output=True, text=True)
 
 
+REPORTER_DIR = "/opt/benchme"
+# The plugin's module name and the variable it reads its output path from.
+# These live here rather than in outcomes.py because they are facts about
+# INSTALLING the plugin; outcomes.py only parses what it writes and stays free
+# of any container knowledge.
+PLUGIN_MODULE = "benchme_reporter"
+REPORT_ENV = "BENCHME_REPORT"
+
+
+def install_reporter(container):
+    """Write the pytest reporter plugin into a running container.
+
+    Once per container, not per candidate. Lives outside the checkout so it
+    cannot be collected as a test, cannot appear in `git status` inside the
+    workdir, and survives the workdir being deleted between candidates.
+
+    Written as BYTES for the same reason runner._apply is: subprocess wraps a
+    text-mode stdin in a TextIOWrapper with newline=None, which on Windows
+    turns every "\\n" into "\\r\\n". A CRLF Python file still imports, but the
+    same defect silently corrupted patch application twice before, so the
+    habit is worth keeping.
+
+    Written as ROOT (`--user 0:0`), the one place stage 2 needs it. The
+    container itself runs as tierb.DEFAULT_CONTAINER_USER (1000:1000), and
+    /opt in python:3.12-slim is root-owned 755, so the mkdir would fail with
+    "Permission denied" for every quarter -- SystemExit before a single
+    candidate ran. Only this one file is placed as root; the resulting 755
+    directory and 644 file are readable by uid 1000, which is all `-p
+    benchme_reporter` needs, and pytest still runs unprivileged. Escalating
+    here rather than relaxing the container's user keeps the property tierb
+    cares about: no TEST ever runs as root, so no permission bug can be
+    masked.
+    """
+    source = (Path(__file__).resolve().parent / "reporter_plugin.py").read_bytes()
+    target = f"{REPORTER_DIR}/{PLUGIN_MODULE}.py"
+    proc = subprocess.run(
+        ["docker", "exec", "-i", "--user", "0:0", container, "sh", "-c",
+         f"mkdir -p {REPORTER_DIR} && cat > {target}"],
+        input=source, capture_output=True, env=tierb.docker_env())
+    if proc.returncode != 0:
+        return f"could not install reporter: {proc.stderr.decode()[:200]}"
+    return None
+
+
 def start_container(image, name):
     subprocess.run(["docker", "rm", "-f", name], capture_output=True,
                    text=True, env=tierb.docker_env())
