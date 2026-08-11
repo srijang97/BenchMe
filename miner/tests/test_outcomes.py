@@ -27,10 +27,11 @@ def test_parse_report_separates_collect_errors_from_tests():
         {"kind": "test", "nodeid": "tests/test_a.py::test_x", "when": "call",
          "outcome": "failed", "message": "assert 1 == 2"},
     )
-    tests, collect = outcomes.parse_report(text)
-    assert [r.nodeid for r in tests] == ["tests/test_a.py::test_x"]
-    assert [r.nodeid for r in collect] == ["tests/test_bad.py"]
-    assert collect[0].when == "collect"
+    rep = outcomes.parse_report(text)
+    assert [r.nodeid for r in rep.tests] == ["tests/test_a.py::test_x"]
+    assert [r.nodeid for r in rep.collect] == ["tests/test_bad.py"]
+    assert rep.collect[0].when == "collect"
+    assert rep.exitstatus == 1
 
 
 def test_parse_report_tolerates_blank_lines_and_preserves_message():
@@ -39,9 +40,9 @@ def test_parse_report_tolerates_blank_lines_and_preserves_message():
          "outcome": "failed",
          "message": "Failed: DID NOT RAISE <class 'ValueError'>"},
     ) + "\n"
-    tests, collect = outcomes.parse_report(text)
-    assert collect == []
-    assert tests[0].message == "Failed: DID NOT RAISE <class 'ValueError'>"
+    rep = outcomes.parse_report(text)
+    assert rep.collect == []
+    assert rep.tests[0].message == "Failed: DID NOT RAISE <class 'ValueError'>"
 
 
 def test_parse_report_raises_on_malformed_line():
@@ -91,10 +92,48 @@ def test_parse_report_consumes_the_terminator_without_surfacing_it():
         {"kind": "collect", "nodeid": "t_bad.py", "when": "collect",
          "outcome": "failed", "message": "ImportError"},
     )
-    tests, collect = outcomes.parse_report(text)
-    assert [r.nodeid for r in tests] == ["t.py::a"]
-    assert [r.nodeid for r in collect] == ["t_bad.py"]
-    assert outcomes.collapse(tests) == {"t.py::a": outcomes.PASSED}
+    rep = outcomes.parse_report(text)
+    assert [r.nodeid for r in rep.tests] == ["t.py::a"]
+    assert [r.nodeid for r in rep.collect] == ["t_bad.py"]
+    assert outcomes.collapse(rep.tests) == {"t.py::a": outcomes.PASSED}
+
+
+def test_parse_report_carries_the_exit_status_out_of_the_terminator():
+    # THE CRASHED-SESSION DEFECT. pytest calls pytest_sessionfinish from
+    # wrap_session's `finally` whenever sessionstart ran, so an INTERRUPTED (2)
+    # or INTERNAL_ERROR (3) session writes SOME records and then the
+    # terminator: the report is well-formed and terminated, and it is still a
+    # partial measurement. The terminator's presence cannot tell the two apart;
+    # only the status it carries can, so it must not be discarded here.
+    text = "\n".join(json.dumps(r) for r in (
+        {"kind": "test", "nodeid": "t.py::a", "when": "call",
+         "outcome": "passed", "message": None},
+        {"kind": "sessionfinish", "exitstatus": 3},
+    )) + "\n"
+    rep = outcomes.parse_report(text)
+    assert rep.exitstatus == 3
+    assert rep.exitstatus not in outcomes.OK_EXIT_STATUSES
+    assert [r.nodeid for r in rep.tests] == ["t.py::a"]
+
+
+def test_a_terminator_with_no_usable_exit_status_reads_as_none():
+    # A missing or mangled value must NOT default to something acceptable. None
+    # is deliberately absent from OK_EXIT_STATUSES, so the caller books
+    # apparatus rather than concluding from a session it cannot vouch for.
+    for finish in ({"kind": "sessionfinish"},
+                   {"kind": "sessionfinish", "exitstatus": None},
+                   {"kind": "sessionfinish", "exitstatus": "boom"}):
+        text = json.dumps(finish) + "\n"
+        rep = outcomes.parse_report(text)
+        assert rep.exitstatus is None, finish
+        assert rep.exitstatus not in outcomes.OK_EXIT_STATUSES
+
+
+def test_ok_exit_statuses_are_exactly_the_three_conclusive_ones():
+    # 0 all passed, 1 tests failed, 5 nothing collected. 2 interrupted,
+    # 3 internal error and 4 usage error mean the session did not complete.
+    # Pinned so a future edit cannot quietly widen the set.
+    assert set(outcomes.OK_EXIT_STATUSES) == {0, 1, 5}
 
 
 def test_collapse_call_failure_is_a_failure():
@@ -129,6 +168,49 @@ def test_collapse_records_passed_and_skipped():
             outcomes.Record("t.py::b", "call", "skipped", "needs network")]
     assert outcomes.collapse(recs) == {"t.py::a": outcomes.PASSED,
                                        "t.py::b": outcomes.SKIPPED}
+
+
+def test_collapse_treats_a_setup_phase_skip_as_skipped():
+    # @pytest.mark.skip, @pytest.mark.skipif and a fixture calling
+    # pytest.skip() all report at when="setup" and emit NO call record, so a
+    # call-only rule left the node absent from the map entirely. Absent and
+    # SKIPPED are not the same downstream: a code patch that adds a skipif
+    # turned a previously-passing test into a vanished id -> `broken` -> a
+    # false `rejected:regression_broken`. Marker skips are the common case;
+    # before this, `skipped_after` could only ever fire for an in-body skip.
+    recs = [outcomes.Record("t.py::a", "setup", "skipped",
+                            "Skipped: needs python>=3.13")]
+    assert outcomes.collapse(recs) == {"t.py::a": outcomes.SKIPPED}
+
+
+def test_collapse_a_failed_setup_still_outranks_a_skip():
+    # ORDERING. A test whose fixture blew up never asserted, so it is an ERROR
+    # whatever else is reported for it, and the skip must not overwrite that in
+    # either record order.
+    boom = outcomes.Record("t.py::a", "setup", "failed", "RuntimeError: boom")
+    skip = outcomes.Record("t.py::a", "teardown", "skipped", "Skipped: x")
+    assert outcomes.collapse([boom, skip]) == {"t.py::a": outcomes.ERROR}
+    assert outcomes.collapse([skip, boom]) == {"t.py::a": outcomes.ERROR}
+
+
+def test_collapse_a_teardown_skip_does_not_hide_a_failed_teardown():
+    recs = [outcomes.Record("t.py::a", "call", "passed", None),
+            outcomes.Record("t.py::a", "teardown", "failed", "IOError: x")]
+    assert outcomes.collapse(recs) == {"t.py::a": outcomes.ERROR}
+
+
+def test_diff_routes_a_marker_skip_added_by_the_patch_to_skipped_after():
+    # End to end for the defect above: the before side ran the test, the code
+    # patch added a skipif, and the after side reports only a setup skip. That
+    # is `skipped_after` -- visible, not a regression -- and emphatically not
+    # `broken`, which would book a false rejected:regression_broken.
+    before = outcomes.collapse(
+        [outcomes.Record("t.py::a", "call", "passed", None)])
+    after = outcomes.collapse(
+        [outcomes.Record("t.py::a", "setup", "skipped", "Skipped: gated")])
+    d = outcomes.diff(before, after)
+    assert d["skipped_after"] == ["t.py::a"]
+    assert d["broken"] == []
 
 
 def test_label_bare_assert():

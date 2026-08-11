@@ -30,6 +30,16 @@ SKIPPED = "skipped"
 # negative, so ERROR wins over whatever `call` reported.
 _STRUCTURAL_PHASES = ("setup", "teardown")
 
+# pytest exit statuses this project is willing to draw a conclusion from:
+#   0  every test passed
+#   1  tests were collected and some failed
+#   5  nothing was collected
+# Everything else -- 2 interrupted, 3 internal error, 4 usage error -- means
+# the session did NOT complete. 5 stays acceptable because runner._measure's
+# `if not before` / `if not after` guards already handle "no outcomes" with a
+# far better message than a generic exit-status complaint.
+OK_EXIT_STATUSES = frozenset({0, 1, 5})
+
 
 class Record(NamedTuple):
     nodeid: str
@@ -38,8 +48,22 @@ class Record(NamedTuple):
     message: str
 
 
+class Report(NamedTuple):
+    """What one pytest session said.
+
+    `exitstatus` is carried out of the terminator rather than discarded,
+    because the terminator's PRESENCE does not prove the session completed --
+    see parse_report. `None` when the terminator carried no usable integer,
+    which is never treated as acceptable.
+    """
+    tests: list
+    collect: list
+    exitstatus: int
+
+
 def parse_report(text):
-    """(test_records, collect_error_records) from the reporter's JSONL.
+    """A `Report` (test records, collect-error records, exit status) from the
+    reporter's JSONL.
 
     INVARIANT: the report must end with the reporter's `sessionfinish` record.
     That record is consumed here -- it is never returned as a test or a
@@ -50,14 +74,28 @@ def parse_report(text):
 
       * a malformed line -- a partial or interleaved write. Skipping it would
         silently shrink the outcome set.
-      * a missing terminator -- the plugin died mid-session. A report cut at a
-        clean line boundary is perfectly valid JSONL, so nothing else can tell
-        it from a short-but-complete run. The candidate's oracle test would
-        simply be absent from `before` and the run would book
-        `rejected:unchanged`: apparatus wearing the shape of a verdict.
+      * a missing terminator -- the plugin died mid-session mid-LINE, or never
+        reached sessionfinish at all. A report cut at a clean line boundary is
+        perfectly valid JSONL, so nothing else can tell it from a
+        short-but-complete run. The candidate's oracle test would simply be
+        absent from `before` and the run would book `rejected:unchanged`:
+        apparatus wearing the shape of a verdict.
+
+    The terminator is NOT sufficient on its own, which is why `exitstatus` is
+    returned rather than dropped. pytest calls `pytest_sessionfinish` from
+    `wrap_session`'s `finally` whenever `pytest_sessionstart` ran -- including
+    on ExitCode.INTERRUPTED (2) and ExitCode.INTERNAL_ERROR (3). A session that
+    dies mid-run therefore writes SOME records and then the terminator, and a
+    parser that only checks for the terminator calls that partial report
+    complete. The caller (`runner._pytest`) gates on OK_EXIT_STATUSES.
+
+    `exitstatus` is None when the record carried no integer -- an old report,
+    or a mangled value. None is deliberately not in OK_EXIT_STATUSES: a
+    missing value must never default to the acceptable case.
     """
     tests, collect = [], []
     finished = False
+    exitstatus = None
     for lineno, line in enumerate(text.splitlines(), start=1):
         line = line.strip()
         if not line:
@@ -70,6 +108,10 @@ def parse_report(text):
                 f"report was truncated or interleaved: {line[:120]!r}") from exc
         if raw.get("kind") == "sessionfinish":
             finished = True
+            try:
+                exitstatus = int(raw["exitstatus"])
+            except (KeyError, TypeError, ValueError):
+                exitstatus = None
             continue
         rec = Record(raw["nodeid"], raw["when"], raw["outcome"],
                      raw.get("message"))
@@ -79,15 +121,32 @@ def parse_report(text):
             f"reporter report is truncated: no sessionfinish record, so the "
             f"pytest session did not run to the end "
             f"({len(tests)} test and {len(collect)} collect records read)")
-    return tests, collect
+    return Report(tests, collect, exitstatus)
 
 
 def collapse(records):
     """node id -> one of FAILURE / ERROR / PASSED / SKIPPED.
 
     Several records can share a node id (a passing call plus a failing
-    teardown, say). Precedence: a failure in setup or teardown makes the whole
-    test an ERROR; otherwise the call phase decides.
+    teardown, say). Precedence, highest first:
+
+      1. a FAILED setup or teardown makes the whole test an ERROR. It never
+         asserted, or it did not leave the process clean for the next test.
+      2. a SKIPPED outcome in ANY phase makes the test SKIPPED. `@pytest.mark.
+         skip`, `@pytest.mark.skipif` and a fixture calling `pytest.skip()` all
+         report at `when="setup"` and emit no call record at all, so a
+         call-only rule left the node ABSENT from this map rather than
+         SKIPPED. Absence and skip are treated very differently downstream: a
+         previously-passing test that a code patch newly skips would vanish,
+         fail outcomes.diff's exact-swap rename rule, land in `broken`, and
+         book a false `rejected:regression_broken` -- our reading of the run
+         turned into a verdict about the commit. In practice `skipped_after`
+         could only ever fire for an in-body `pytest.skip()` before this.
+      3. otherwise the call phase decides.
+
+    Ordering matters and is pinned by tests: a failed setup still outranks a
+    skip (rule 1 is checked first, and the ERROR guard below stops a later
+    skip record overwriting it), and a skip outranks a passing teardown.
     """
     status = {}
     for rec in records:
@@ -96,12 +155,13 @@ def collapse(records):
             continue
         if status.get(rec.nodeid) == ERROR:
             continue
+        if rec.outcome == "skipped":
+            status[rec.nodeid] = SKIPPED
+            continue
         if rec.when != "call":
             continue
         if rec.outcome == "failed":
             status[rec.nodeid] = FAILURE
-        elif rec.outcome == "skipped":
-            status[rec.nodeid] = SKIPPED
         else:
             status[rec.nodeid] = PASSED
     return status

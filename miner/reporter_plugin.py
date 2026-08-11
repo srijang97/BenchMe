@@ -28,6 +28,13 @@ oracle test is simply missing from `before`, and the run books
 `rejected:unchanged` -- our crash wearing the shape of a verdict about the
 commit. The terminator makes "the session ran to the end" a checkable fact
 rather than an assumption.
+
+Its PRESENCE is not sufficient, which is why it carries `exitstatus`. pytest
+calls `pytest_sessionfinish` from `wrap_session`'s `finally` whenever
+`pytest_sessionstart` ran -- including on ExitCode.INTERRUPTED (2) and
+ExitCode.INTERNAL_ERROR (3) -- so a session that dies mid-run writes some
+records AND the terminator. `runner._pytest` gates on the recorded status
+(`outcomes.OK_EXIT_STATUSES`) and books apparatus for anything else.
 """
 import json
 import os
@@ -63,8 +70,9 @@ def pytest_collectreport(report):
 
 
 def pytest_sessionfinish(session, exitstatus):
-    # The terminator. Its ABSENCE is the signal -- see the module docstring
-    # and outcomes.parse_report. int() because pytest passes an ExitCode enum
-    # on modern versions and a bare int on older ones, and json.dumps of an
-    # IntEnum is version-dependent noise we do not want in the report.
+    # The terminator. Its ABSENCE is one signal and its `exitstatus` is the
+    # other -- see the module docstring and outcomes.parse_report. int()
+    # because pytest passes an ExitCode enum on modern versions and a bare int
+    # on older ones, and json.dumps of an IntEnum is version-dependent noise we
+    # do not want in the report.
     _emit({"kind": "sessionfinish", "exitstatus": int(exitstatus)})

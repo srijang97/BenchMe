@@ -70,11 +70,15 @@ def main():
         print(f"  {lbl:28} {n}")
 
     print("\nAPPARATUS RATE")
-    adjudicated = [r for r in new.values() if r.get("status") != "error"]
-    apparatus = [r for r in adjudicated if r.get("status") == "apparatus"]
-    if adjudicated:
-        rate = 100.0 * len(apparatus) / len(adjudicated)
-        print(f"  {len(apparatus)}/{len(adjudicated)} = {rate:.1f}%"
+    # "processed", not "adjudicated": report.py reserves "adjudicated" for
+    # validated + rejected, which excludes apparatus by definition and so
+    # cannot be this rate's denominator. Same word, two denominators, is how a
+    # reader quotes one rate as the other.
+    processed = [r for r in new.values() if r.get("status") != "error"]
+    apparatus = [r for r in processed if r.get("status") == "apparatus"]
+    if processed:
+        rate = 100.0 * len(apparatus) / len(processed)
+        print(f"  {len(apparatus)}/{len(processed)} processed = {rate:.1f}%"
               f"   (tripwire at 10%)")
 
     print("\nDETERMINISM (pass-1 oracle reproduced in pass 2)")

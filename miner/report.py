@@ -7,9 +7,18 @@ Three properties of this renderer are load-bearing and must survive any edit:
    failures, not the commit's. The screener's central lesson was that six of
    seven eliminations were the apparatus rather than the subject, and that was
    only visible because the two were counted separately. The headline rate is
-   therefore validated / adjudicated, where adjudicated excludes both; the
-   attempted-denominator figure is printed beside it and explicitly labelled
-   as NOT the conversion rate, so nobody can quote it as one.
+   therefore validated / adjudicated, where ADJUDICATED means "reached a
+   verdict about the commit" -- validated plus rejected, excluding both of our
+   failure classes; the attempted-denominator figure is printed beside it and
+   explicitly labelled as NOT the conversion rate, so nobody can quote it as
+   one.
+
+   "Adjudicated" has exactly that one meaning in this file. The apparatus rate
+   in `_composition` needs a DIFFERENT denominator -- apparatus has to be
+   inside its own denominator or the rate is meaningless -- so it counts
+   `processed` records (everything but `error`) and says so. The two words are
+   kept distinct deliberately: one shared word for two denominators is how a
+   reader ends up quoting one rate as the other.
 
 2. Oracle composition and the apparatus rate are emitted unconditionally, even
    when empty. A zero is a measurement; an absent section looks like an
@@ -155,7 +164,9 @@ def _funnel(out, cands, done):
                f"below): **{len(apparatus)}**")
     out.append(f"- Error (miner bug, non-terminal, retried after a fix -- also "
                f"excluded): **{len(errors)}**")
-    out.append(f"- Adjudicated (validated + rejected): **{adjudicated}**")
+    out.append(f"- Adjudicated -- reached a verdict about the commit "
+               f"(validated + rejected; apparatus and error excluded): "
+               f"**{adjudicated}**")
     out.append("")
 
     if adjudicated:
@@ -233,12 +244,23 @@ def _composition(out, done):
             out.append(f"| `{lbl}` | {n} | {100.0 * n / total:.1f}% |")
         out.append("")
 
-    adjudicated = [r for r in done if r.get("status") != "error"]
-    if adjudicated:
-        apparatus = [r for r in adjudicated if r.get("status") == "apparatus"]
-        rate = 100.0 * len(apparatus) / len(adjudicated)
-        out += [f"Apparatus: {len(apparatus)}/{len(adjudicated)} adjudicated "
-                f"candidates ({rate:.1f}%).", ""]
+    # NOT "adjudicated". That word means validated + rejected everywhere else
+    # in this file (see _funnel and the module docstring), and apparatus is
+    # excluded from it by definition -- so an apparatus rate over it would be
+    # zero over a denominator that cannot contain its numerator. This rate
+    # needs apparatus INSIDE the denominator, so it counts every record we
+    # processed to a durable outcome, i.e. everything but the retryable
+    # `error`. Different denominator, different word.
+    processed = [r for r in done if r.get("status") != "error"]
+    if processed:
+        apparatus = [r for r in processed if r.get("status") == "apparatus"]
+        rate = 100.0 * len(apparatus) / len(processed)
+        out += [f"Apparatus: {len(apparatus)}/{len(processed)} processed "
+                f"candidates ({rate:.1f}%) -- 'processed' is every record "
+                f"except the retryable `error`s, which is a WIDER denominator "
+                f"than the 'adjudicated' one in the funnel above (that one is "
+                f"validated + rejected and excludes apparatus by "
+                f"definition).", ""]
         # Decision 13. The first 2025Q3 batch ran at 48%: mining on would have
         # spent candidates on our own defects and called the result a yield.
         if rate > APPARATUS_TRIPWIRE:
@@ -267,7 +289,10 @@ def _rejections(out, rejected):
     out += ["| rejection class | count | what it means |", "|---|---|---|"]
     meanings = {
         "unchanged": "no test went fail->pass (see the `before_failed` caveat)",
-        "regression_broken": "code patch broke previously-passing tests",
+        "regression_broken": "code patch broke previously-passing tests (the "
+                             "recorded reason counts genuinely-failing and "
+                             "vanished node ids separately -- see the audit "
+                             "below)",
         "unstable": "pass 1's fail->pass set did not reproduce in the "
                     "full-suite pass-2 run -- flaky or selection-dependent",
     }

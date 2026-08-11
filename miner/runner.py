@@ -14,8 +14,19 @@ Both passes run inside ONE long-lived container for the quarter, torn down in a
 Two distinctions are load-bearing here and are never allowed to blur:
 
   rejected:<reason>   a verdict about the COMMIT -- it does not qualify.
-  apparatus           a verdict about US -- the patch would not apply, the
-                      container died, nothing parsed, validate.py raised.
+                      TERMINAL.
+  apparatus           a verdict about US, and a DURABLE one -- the patch would
+                      not apply, nothing parsed, our path filters left no
+                      target, validate.py raised. Also TERMINAL: rerunning it
+                      unchanged would fail the same way.
+  error               a verdict about US that a rerun may not repeat -- a miner
+                      bug, or transient infrastructure (the container timed
+                      out, the clone failed, the patch could not be streamed
+                      in). NON-terminal in record.is_done, so the candidate is
+                      retried once the tooling is fixed. When in doubt between
+                      apparatus and error, prefer error: the cost of a retry is
+                      one run, the cost of a wrong `apparatus` is a candidate
+                      retired for good.
 
   anchored=True       the image was built from the quarter's frozen lockfile.
   anchored=False      it was resolved fresh: a MODERN environment wearing the
@@ -33,6 +44,7 @@ import sys
 import traceback
 from collections import namedtuple
 from pathlib import Path, PurePosixPath
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "screener"))
 import metrics  # noqa: E402
@@ -85,21 +97,54 @@ def _guard(proc, what):
     return proc
 
 
+# What a container-side step failed AS, carried alongside the reason so the
+# call site cannot flatten the distinction back out. `status` is "apparatus"
+# (ours and TERMINAL -- an un-retryable fact, e.g. the patch does not apply to
+# this tree) or "error" (ours and NON-terminal -- transient infrastructure, so
+# the candidate is retried). See record.is_done.
+Failure = namedtuple("Failure", "status reason")
+
+
 def _checkout(container, sha, workdir):
+    """None on success, else a Failure.
+
+    A clone or checkout that fails is TRANSIENT INFRASTRUCTURE, not a fact
+    about the commit and not an un-retryable fact about our tooling: the disk
+    filled, the promisor was unreachable, the container's git was wedged. It is
+    the same class of event as the ContainerLost timeout, which
+    validate_quarter deliberately books as `error` precisely so that
+    infrastructure loss does not permanently retire a possibly-valid candidate.
+    `error` is non-terminal in record.is_done, so the candidate comes back on
+    the next sweep; `apparatus` would retire it for good.
+    """
     r = _guard(quarters.exec_in(container, ["git", "clone", "--quiet",
                                             "--no-checkout", "/repo", workdir]),
                "git clone")
     if r.returncode != 0:
-        return f"clone failed: {(r.stdout + r.stderr)[:200]}"
+        return Failure("error", f"clone failed: {(r.stdout + r.stderr)[:200]}")
     r = _guard(quarters.exec_in(
         container, ["git", "-C", workdir, "checkout", "--quiet", sha]),
         "git checkout")
     if r.returncode != 0:
-        return f"checkout failed: {(r.stdout + r.stderr)[:200]}"
+        return Failure("error",
+                       f"checkout failed: {(r.stdout + r.stderr)[:200]}")
     return None
 
 
 def _apply(container, workdir, patch_text, label):
+    """None on success, else a Failure. Two very different failures:
+
+      * the patch could not be WRITTEN into the container -- the `docker exec
+        -i` that streams it died. Transient infrastructure, exactly like
+        _checkout and like the ContainerLost timeout validate_quarter books as
+        `error`, so it is `error`: non-terminal, retried on the next sweep.
+        Booking it apparatus would retire a possibly-valid candidate on the
+        strength of a hiccup in a pipe.
+      * the patch would not APPLY. That is a durable fact about our capture --
+        the same diff against the same tree will fail the same way -- so it
+        stays `apparatus`, terminal, and is not retried until the capture is
+        fixed.
+    """
     if not patch_text.strip():
         return None
     path = f"{workdir}/.{label}.patch"
@@ -120,12 +165,18 @@ def _apply(container, workdir, patch_text, label):
         input=patch_text.encode("utf-8"), capture_output=True,
         env=tierb.docker_env())
     if proc.returncode != 0:
-        return f"could not write {label} patch"
+        # Transient: see the docstring. `error`, not apparatus.
+        return Failure("error",
+                       f"could not write {label} patch into the container "
+                       f"(rc={proc.returncode}): "
+                       f"{proc.stderr.decode('utf-8', 'replace')[:200]}")
     r = _guard(quarters.exec_in(
         container, ["git", "-C", workdir, "apply", "--3way", path]),
         f"git apply ({label})")
     if r.returncode != 0:
-        return f"{label} patch would not apply: {(r.stdout + r.stderr)[:200]}"
+        return Failure(
+            "apparatus",
+            f"{label} patch would not apply: {(r.stdout + r.stderr)[:200]}")
     return None
 
 
@@ -136,10 +187,24 @@ def _pytest(container, workdir, targets, log_path, phase, timeout=1800):
     `status_map` is node id -> one of outcomes.FAILURE/ERROR/PASSED/SKIPPED.
     `records` is the raw list of outcomes.Record, kept because labelling needs
     each failing node's message and the collapsed map does not carry it.
-    Raises ValueError (from outcomes.parse_report) when the report is
-    malformed OR truncated -- the latter meaning the plugin never wrote its
-    sessionfinish terminator, so the session did not run to the end. The
-    caller books either as apparatus.
+
+    Raises ValueError when the session cannot be concluded from, in three
+    ways, ALL of which the caller books as apparatus:
+
+      * the report is malformed -- a partial or interleaved line;
+      * the report is truncated -- the plugin never wrote its sessionfinish
+        terminator, so the session did not run to the end;
+      * the session finished on an exit status outside
+        outcomes.OK_EXIT_STATUSES. The terminator's presence does NOT prove
+        completion: pytest calls pytest_sessionfinish from wrap_session's
+        `finally` whenever sessionstart ran, including on INTERRUPTED (2) and
+        INTERNAL_ERROR (3). Such a session writes some records and then the
+        terminator, the report parses as complete, the candidate's oracle test
+        is silently missing, and pass 1 books `rejected:unchanged` -- a
+        terminal verdict about the COMMIT caused by OUR crash. Only 0 (all
+        passed), 1 (tests failed) and 5 (nothing collected) are conclusions;
+        5 stays acceptable because the `if not before` / `if not after` guards
+        in _measure describe that case far better than this check could.
 
     The checkout goes on PYTHONPATH because the image deliberately does NOT
     contain the project itself -- see quarters' module docstring. The reporter
@@ -187,8 +252,50 @@ def _pytest(container, workdir, targets, log_path, phase, timeout=1800):
         raise ValueError(
             f"reporter wrote nothing for the {phase} run (rc={rr.returncode}); "
             f"pytest exited {r.returncode}: {out[-300:]}")
-    tests, collect = outcomes.parse_report(rr.stdout)
-    return outcomes.collapse(tests), tests, collect, out
+    rep = outcomes.parse_report(rr.stdout)
+    if rep.exitstatus not in outcomes.OK_EXIT_STATUSES:
+        # None (no usable status in the terminator) lands here too: a missing
+        # value must never default to the acceptable case.
+        raise ValueError(
+            f"the {phase} pytest session finished on exit status "
+            f"{rep.exitstatus} (acceptable: "
+            f"{sorted(outcomes.OK_EXIT_STATUSES)}), so it did not run to the "
+            f"end and nothing may be concluded from its "
+            f"{len(rep.tests)} test and {len(rep.collect)} collect record(s); "
+            f"pytest exited {r.returncode}: {out[-200:]}")
+    return outcomes.collapse(rep.tests), rep.tests, rep.collect, out
+
+
+# Why _runnable_targets came back with nothing to run. THREE of these four are
+# facts about US and one is a fact about the commit, and collapsing them was a
+# live defect: `dac3c437` and `568509c0` in miner/out/validated.jsonl are
+# terminally `rejected:unchanged` because their only test path lived under
+# `tests/typechecking/`, i.e. because of OUR filter. candidates.py's own
+# comment on NON_PYTEST_TEST_DIRS says that filter must never turn our defect
+# into a verdict about the commit; this constant set is how that is enforced.
+EMPTY_FILTERED = "filtered"          # ours: dropped by NON_PYTEST_TEST_DIRS
+EMPTY_NOT_RUNNABLE = "not_runnable"  # ours: fixtures/conftest only, nothing to run
+EMPTY_ABSENT = "absent"              # ours: not present, and not because it was deleted
+EMPTY_DELETED = "deleted"            # the COMMIT deleted its test files
+
+# Only EMPTY_DELETED is a verdict about the commit. Everything else -- and
+# anything unrecognised, which is the point of testing membership rather than
+# inequality -- is ours and books apparatus.
+EMPTY_IS_A_VERDICT = frozenset({EMPTY_DELETED})
+
+
+class RunnableTargets(NamedTuple):
+    """`paths` is empty exactly when `why` is set; `err` means the probe broke.
+
+    Three channels rather than two, because "we found nothing to run" has four
+    causes that must not be flattened -- see the EMPTY_* constants. `detail` is
+    a human string naming the paths involved, ready to drop into a record's
+    reason.
+    """
+    paths: list
+    err: str
+    why: str
+    detail: str
 
 
 def _runnable_targets(container, workdir, tests):
@@ -206,29 +313,81 @@ def _runnable_targets(container, workdir, tests):
     nothing from. Filtering here keeps all of those out of the apparatus
     column.
 
-    Returns (targets, err). `err` is not None when the PROBE ITSELF failed:
+    Returns a RunnableTargets. `err` is not None when the PROBE ITSELF failed:
     an unchecked probe returns an empty set on failure, which is
     indistinguishable from "the commit touches no runnable test" and lands as
     `rejected:unchanged` -- the same shape as the `_numstat` defect fixed in
     Task 2. The loop is written with `if ... then` rather than `[ -e p ] && ...`
     precisely so the shell's exit status reports the probe, not whether the
     last path happened to exist.
+
+    `why` is what makes the empty result legible to the caller. The probe
+    classifies every path it cannot find: a path that IS in the parent commit
+    (`git cat-file -e HEAD:<p>`, HEAD being the parent, since the workdir is a
+    checkout of it with the test patch applied but not committed) and is now
+    gone was deleted by the commit's own test patch -- the one genuine verdict.
+    A path that is in neither is unexplained, which is ours.
     """
+    filtered = [t for t in tests
+                if candidates.is_non_pytest_test(record.REPO.name, t)]
+    dropped = set(filtered)
     wanted = [t for t in tests
-              if metrics.is_test_file(t)
-              and PurePosixPath(t).name != "conftest.py"
-              and not candidates.is_non_pytest_test(record.REPO.name, t)]
+              if t not in dropped
+              and metrics.is_test_file(t)
+              and PurePosixPath(t).name != "conftest.py"]
     if not wanted:
-        return [], None
-    script = ("cd {wd} || exit 3; "
-              "for p in {ps}; do if [ -e \"$p\" ]; then echo \"$p\"; fi; done").format(
-        wd=shlex.quote(workdir), ps=" ".join(shlex.quote(p) for p in wanted))
+        # Both branches are OURS. The first is the hand-maintained config
+        # filter, known incomplete; the second is validate._belongs_to_test_side
+        # admitting a path (a non-.py fixture, a conftest.py) that is real but
+        # not something pytest can be pointed at on its own.
+        if filtered:
+            rest = sorted(set(tests) - dropped)
+            return RunnableTargets(
+                [], None, EMPTY_FILTERED,
+                "OUR candidates.NON_PYTEST_TEST_DIRS filter dropped "
+                + ", ".join(sorted(filtered)[:8])
+                + (", and nothing runnable remains among "
+                   + ", ".join(rest[:8]) if rest
+                   else ", which was every test path the commit touched"))
+        return RunnableTargets(
+            [], None, EMPTY_NOT_RUNNABLE,
+            "no runnable pytest target among the touched test paths (all are "
+            "fixtures, non-.py assets or conftest.py): "
+            + ", ".join(sorted(tests)[:8]))
+    script = (
+        "cd {wd} || exit 3; "
+        "for p in {ps}; do "
+        "if [ -e \"$p\" ]; then echo \"present $p\"; "
+        "elif git cat-file -e \"HEAD:$p\" 2>/dev/null; then echo \"deleted $p\"; "
+        "else echo \"absent $p\"; fi; done"
+    ).format(wd=shlex.quote(workdir),
+             ps=" ".join(shlex.quote(p) for p in wanted))
     r = _guard(quarters.exec_in(container, ["sh", "-c", script]), "target probe")
     if r.returncode != 0:
-        return None, ("target probe failed (rc={}): {}".format(
-            r.returncode, (r.stdout + r.stderr)[:200]))
-    present = set(r.stdout.split())
-    return [t for t in wanted if t in present], None
+        return RunnableTargets(None, "target probe failed (rc={}): {}".format(
+            r.returncode, (r.stdout + r.stderr)[:200]), None, None)
+    seen = {}
+    for line in r.stdout.splitlines():
+        state, _, path = line.strip().partition(" ")
+        if state in ("present", "deleted", "absent") and path:
+            seen[path] = state
+    present = [t for t in wanted if seen.get(t) == "present"]
+    if present:
+        return RunnableTargets(present, None, None, None)
+    # Nothing to run. `absent` outranks `deleted`: a path the probe cannot
+    # explain means our picture of the tree is wrong, and ambiguity resolves
+    # toward apparatus, never toward a verdict about the commit.
+    unexplained = [t for t in wanted if seen.get(t) != "deleted"]
+    if unexplained:
+        return RunnableTargets(
+            [], None, EMPTY_ABSENT,
+            "the existence probe found no runnable test path present, and "
+            "these are not explained by a deletion in the commit: "
+            + ", ".join(sorted(unexplained)[:8]))
+    return RunnableTargets(
+        [], None, EMPTY_DELETED,
+        "the commit deletes every test file it touches: "
+        + ", ".join(sorted(wanted)[:8]))
 
 
 def validate_one(container, cand, repo, anchored, pass2=False, pass1_f2p=None):
@@ -368,12 +527,16 @@ def _pass2_targets(container, workdir, tests):
     is reused rather than reimplemented so the conftest, deleted-file and
     NON_PYTEST_TEST_DIRS filters and the existence probe all still apply, and
     its probe error is handled exactly as pass 1 handles it.
+
+    `why` is deliberately ignored here: pass 2 always has the "tests" target, so
+    an empty extra set is not an empty selection and says nothing about the
+    candidate. Only pass 1 has to adjudicate it.
     """
-    extra, err = _runnable_targets(container, workdir, tests)
-    if err:
-        return None, err
+    found = _runnable_targets(container, workdir, tests)
+    if found.err:
+        return None, found.err
     targets = ["tests"]
-    for t in extra:
+    for t in found.paths:
         # Anything already under tests/ is covered by the "tests" target;
         # naming it twice makes pytest collect the file a second time.
         if PurePosixPath(t).parts[:1] == ("tests",) or t in targets:
@@ -392,9 +555,12 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
         out.update(status="rejected:unchanged", reason="no test paths")
         return out
 
-    err = _checkout(container, parent, workdir)
-    if err:
-        out.update(status="apparatus", reason=err)
+    # `fail.status` is "error" here, not "apparatus": a clone or checkout that
+    # failed is transient infrastructure, and `error` is non-terminal so the
+    # candidate is retried. See _checkout.
+    fail = _checkout(container, parent, workdir)
+    if fail:
+        out.update(status=fail.status, reason=fail.reason)
         return out
 
     # validate.make_patch raises when a non-empty pathspec yields an empty
@@ -409,9 +575,12 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
         out.update(status="apparatus", reason=f"make_patch: {exc}"[:300])
         return out
 
-    err = _apply(container, workdir, test_patch, "test")
-    if err:
-        out.update(status="apparatus", reason=err)
+    # "could not write the patch" is transient and books `error`; "the patch
+    # would not apply" is durable and books `apparatus`. _apply decides which,
+    # because only _apply can tell them apart.
+    fail = _apply(container, workdir, test_patch, "test")
+    if fail:
+        out.update(status=fail.status, reason=fail.reason)
         return out
 
     if pass2:
@@ -420,14 +589,30 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
             out.update(status="apparatus", reason=probe_err)
             return out
     else:
-        targets, probe_err = _runnable_targets(container, workdir, tests)
-        if probe_err:
-            out.update(status="apparatus", reason=probe_err)
+        found = _runnable_targets(container, workdir, tests)
+        if found.err:
+            out.update(status="apparatus", reason=found.err)
             return out
+        targets = found.paths
         if not targets:
-            out.update(status="rejected:unchanged",
-                       reason="no runnable test file among the touched test "
-                              "paths after the test patch")
+            # FOUR causes used to collapse into one `rejected:unchanged`, and
+            # only one of them is a fact about the commit. Everything we did to
+            # the path list -- the NON_PYTEST_TEST_DIRS filter, the
+            # conftest/fixture drop, an unexplained absence -- is ours and
+            # books apparatus. `dac3c437` and `568509c0` are already on disk as
+            # terminal `rejected:unchanged` records for exactly this reason.
+            # Membership, not inequality: an EMPTY_* value this code does not
+            # recognise must fall to apparatus, never to a verdict.
+            if found.why in EMPTY_IS_A_VERDICT:
+                out.update(
+                    status="rejected:unchanged",
+                    reason=f"no runnable test file among the touched test "
+                           f"paths after the test patch: {found.detail}")
+            else:
+                out.update(
+                    status="apparatus",
+                    reason=f"OUR path selection left pass 1 with no target "
+                           f"({found.why}): {found.detail}"[:300])
             return out
 
     try:
@@ -456,9 +641,9 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
                    reason="no test outcomes on the before side")
         return out
 
-    err = _apply(container, workdir, code_patch, "code")
-    if err:
-        out.update(status="apparatus", reason=err)
+    fail = _apply(container, workdir, code_patch, "code")
+    if fail:
+        out.update(status=fail.status, reason=fail.reason)
         return out
 
     try:
@@ -475,6 +660,30 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
     if not after:
         out.update(status="apparatus",
                    reason="no test outcomes on the after side")
+        return out
+
+    # Collection errors were recorded and then ignored, which let them decide
+    # verdicts silently. Under `--continue-on-collection-errors` a file that
+    # imports on the before side and not on the after side does not FAIL -- its
+    # tests simply cease to exist. Every previously-passing node in it then
+    # vanishes, misses outcomes.diff's exact-swap rename rule, lands in
+    # `broken`, and books `rejected:regression_broken` claiming those tests
+    # "fail after the code patch", which is false: they were never run. The two
+    # sides were not measured comparably, so NO comparison between them is
+    # honest -- apparatus, ours, not a verdict about the commit.
+    #
+    # Only errors NEW to the after side count. A collection error present on
+    # both sides is a constant of the environment: it removes the same nodes
+    # from both maps and the diff stays symmetric.
+    new_collect = sorted({r.nodeid for r in after_collect}
+                         - {r.nodeid for r in before_collect})
+    if new_collect:
+        out.update(
+            status="apparatus",
+            reason=f"{len(new_collect)} file(s) failed to collect after the "
+                   f"code patch but not before it, so the two sides were not "
+                   f"measured comparably and no regression verdict is honest "
+                   f"(first: {new_collect[0]})"[:300])
         return out
 
     d = outcomes.diff(before, after)
@@ -515,10 +724,18 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
     #
     # Pass 1 carries no pass1_f2p and never enters this block, so it still
     # books `rejected:unchanged` when nothing goes fail->pass -- for pass 1
-    # that is a genuine verdict about the commit and is correct. Reaching
-    # `rejected:unchanged` in PASS 2 now means only what it says: the oracle
-    # reproduced (so the record is past every arm below) and something else
-    # about the diff came up empty.
+    # that is a genuine verdict about the commit and is correct.
+    #
+    # For PASS 2 the `rejected:unchanged` return below is now UNREACHABLE, and
+    # is retained only as a guard. The three arms above return on every other
+    # kind, so a pass-2 record that reaches it must be PASS2_REPRODUCED, and
+    # PASS2_REPRODUCED is only returned with a non-empty `reproduced`, which is
+    # by construction a subset of d["f2p"] -- so d["f2p"] cannot be empty
+    # there. If that return ever fires for a pass-2 record, the invariant has
+    # been broken by an edit above and the record is telling the truth about
+    # the diff while lying about the cause. Do not delete it: the cost of the
+    # dead branch is nil and the cost of falling off the end of the function
+    # is a record with no status at all.
     check = None
     if pass2:
         check = check_pass2_determinism(pass1_f2p, before, d["f2p"])
@@ -643,9 +860,18 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
                                  if t in set(out["f2p"])}
 
     if pass2 and d["broken"]:
-        out.update(status="rejected:regression_broken",
-                   reason=f"{len(d['broken'])} previously-passing tests fail "
-                          f"after the code patch")
+        # Reported as two numbers, not one. A node id that is ABSENT from the
+        # after run did not fail -- it vanished, and "fail" is simply false
+        # about it. The two have different causes (a genuine regression versus
+        # a rename the exact-swap rule did not reconcile) and report._regressions
+        # exists only because the recorded reason used to conflate them.
+        vanished = [n for n in d["broken"] if n not in after]
+        failed = [n for n in d["broken"] if n in after]
+        out.update(
+            status="rejected:regression_broken",
+            reason=f"{len(failed)} previously-passing test(s) fail after the "
+                   f"code patch and {len(vanished)} vanished from the after "
+                   f"run (first: {d['broken'][0]})"[:300])
         return out
 
     out.update(status="validated" if pass2 else "pass1_ok", reason=None)
