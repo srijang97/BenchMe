@@ -189,7 +189,15 @@ def _pytest(container, workdir, targets, log_path, phase, timeout=1800):
 
     `status_map` is node id -> one of outcomes.FAILURE/ERROR/PASSED/SKIPPED.
     `records` is the raw list of outcomes.Record, kept because labelling needs
-    each failing node's message and the collapsed map does not carry it.
+    each failing node's message and the collapsed map does not carry it, and
+    because `adjudicate.import_block_kind` classifies row-10 blocks from the
+    collect records. The test and collect record lists are merged here -- the
+    single point where both exist -- so `Measurements.before_records` (and the
+    labels built from it) see the actual before-side collect Records in live
+    runs. The two lists are the two report channels: `rep.tests` holds the
+    phase records (`when` in call/setup/teardown), `rep.collect` the
+    collection errors (`when == "collect"`); a labeler that only ever sees
+    `rep.tests` would classify every cleared import block as "other".
 
     Raises ValueError when the session cannot be concluded from, in three
     ways, ALL of which the caller books as apparatus:
@@ -266,7 +274,10 @@ def _pytest(container, workdir, targets, log_path, phase, timeout=1800):
             f"end and nothing may be concluded from its "
             f"{len(rep.tests)} test and {len(rep.collect)} collect record(s); "
             f"pytest exited {r.returncode}: {out[-200:]}")
-    return outcomes.collapse(rep.tests), rep.tests, rep.collect, out
+    return (outcomes.collapse(rep.tests),
+            [*rep.tests, *rep.collect],
+            rep.collect,
+            out)
 
 
 # Why _runnable_targets came back with nothing to run: the EMPTY_* constants

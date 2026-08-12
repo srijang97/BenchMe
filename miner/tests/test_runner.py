@@ -34,7 +34,8 @@ PARENT = "b" * 40
 
 def _measure(monkeypatch, before, after, pass1_f2p=None, pass2=True,
              messages=None, before_collect=(), after_collect=(),
-             runnable=None, checkout=None, apply_=None):
+             collect_messages=None, runnable=None, checkout=None,
+             apply_=None):
     """Run `runner._measure` with every container-facing call stubbed.
 
     Everything replaced here is I/O against Docker or git; the branch structure
@@ -42,6 +43,7 @@ def _measure(monkeypatch, before, after, pass1_f2p=None, pass2=True,
     exactly what `_pytest` returns in production.
     """
     messages = messages or {}
+    collect_messages = collect_messages or {}
     if runnable is None:
         runnable = runner.RunnableTargets(["tests/test_a.py"], None, None, None)
     monkeypatch.setattr(runner, "_checkout", lambda *a, **k: checkout)
@@ -57,9 +59,13 @@ def _measure(monkeypatch, before, after, pass1_f2p=None, pass2=True,
         collect = before_collect if phase == runner.BEFORE else after_collect
         records = [outcomes.Record(n, "call", "failed", messages.get(n))
                    for n, s in status.items() if s == outcomes.FAILURE]
-        errors = [outcomes.Record(n, "collect", "failed", "ImportError")
+        errors = [outcomes.Record(n, "collect", "failed",
+                                  collect_messages.get(n, "ImportError"))
                   for n in collect]
-        return dict(status), records, errors, ""
+        # Mirrors runner._pytest's merged return contract: records carries
+        # both the phase records and the collect records, so _measure forwards
+        # the real-shaped collect Records into Measurements.before_records.
+        return dict(status), [*records, *errors], errors, ""
 
     monkeypatch.setattr(runner, "_pytest", fake_pytest)
 
@@ -162,17 +168,37 @@ def test_pass1_cleared_collect_error_is_base_import_blocked(monkeypatch):
     # Row 10 through runner: the code patch clears the import, so the block is
     # intrinsic to the commit. Runner must apply the patch and run after side
     # (not short-circuit), so the cleared error is categorised, not buried.
-    # _measure fabricates before_records from collect errors with generic message;
-    # the runner path still proves it gathered after-side evidence and delegated.
+    # The collect record is a real-shaped reporter record, and _pytest must
+    # carry it into before_records so import_block_kind can classify it: only
+    # the nodeid used to travel, so live row-10 labels were always "other".
     # Direct adjudicate tests pin import_block_kind precisely.
     rec = _measure(monkeypatch,
                    before={}, after={"t.py::a": outcomes.PASSED},
                    pass1_f2p=None, pass2=False,
-                   before_collect=["tests/test_f.py"], after_collect=[])
+                   before_collect=["tests/test_f.py"], after_collect=[],
+                   collect_messages={"tests/test_f.py":
+                                     "ImportError: cannot import name 'NewThing'"})
     assert rec["status"] == "rejected:base_import_blocked"
     assert rec["before_collect_errors"] == ["tests/test_f.py"]
     assert rec["after_collect_errors"] == []
-    assert rec["import_block_kind"] in ("missing_symbol", "warning_as_error", "other")
+    assert rec["import_block_kind"] == "missing_symbol"
+
+
+def test_pass1_cleared_warning_collect_error_is_warning_as_error(monkeypatch):
+    # The other real row-10 mechanism, through the live runner: a
+    # filterwarnings-['error'] project emits a Warning class at import, and
+    # the reporter records it as a collect failure with the warning head. A
+    # distinct classification branch from missing_symbol (suffix match rather
+    # than the exception-name tuple), and cheap to prove end to end -- the
+    # merged collect record must reach import_block_kind here too.
+    rec = _measure(monkeypatch,
+                   before={}, after={"t.py::a": outcomes.PASSED},
+                   pass1_f2p=None, pass2=False,
+                   before_collect=["tests/test_p.py"], after_collect=[],
+                   collect_messages={"tests/test_p.py":
+                                     "PydanticExperimentalWarning: This module is experimental"})
+    assert rec["status"] == "rejected:base_import_blocked"
+    assert rec["import_block_kind"] == "warning_as_error"
 
 
 def test_pass1_persistent_collect_error_is_apparatus(monkeypatch):
@@ -532,6 +558,28 @@ def test_pytest_accepts_the_three_conclusive_exit_statuses(monkeypatch,
         assert collapsed == {A: outcomes.FAILURE}, status
         assert [r.nodeid for r in records] == [A]
         assert collect == []
+
+
+def test_pytest_merges_collect_records_into_records(monkeypatch, tmp_path):
+    # The wiring fix at the source: `_pytest` returns both report channels,
+    # and `records` (what becomes Measurements.before_records) must carry the
+    # real-shaped collect Records so adjudicate.import_block_kind can classify
+    # a cleared row-10 block. Only the nodeids used to travel, which is why
+    # live row-10 labels were always "other".
+    lines = [
+        json.dumps({"kind": "test", "nodeid": A, "when": "call",
+                    "outcome": "failed", "message": "assert 0"}),
+        json.dumps({"kind": "collect", "nodeid": "tests/test_f.py",
+                    "when": "collect", "outcome": "failed",
+                    "message": "ImportError: cannot import name 'NewThing'"}),
+        json.dumps({"kind": "sessionfinish", "exitstatus": 1}),
+    ]
+    _exec_for_pytest(monkeypatch, "\n".join(lines) + "\n")
+    collapsed, records, collect, _out = runner._pytest(
+        "cid", "/work/x", ["tests"], tmp_path / "before.log", "before")
+    assert collapsed == {A: outcomes.FAILURE}
+    assert [r.when for r in records] == ["call", "collect"]
+    assert [r.nodeid for r in collect] == ["tests/test_f.py"]
 
 
 def test_pytest_rejects_a_session_that_did_not_complete(monkeypatch, tmp_path):
