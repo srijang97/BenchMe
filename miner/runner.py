@@ -793,8 +793,9 @@ def _align_core_pin(container, workdir, cand_pin):
     work = shlex.quote(workdir)
     # cand_pin is validated to a safe charset above, so it is safe unquoted
     # on the command line; inside the python -c program it is a Python string
-    # literal, quoted as such.
-    pin = repr(cand_pin)
+    # literal. json.dumps renders a double-quoted literal, which cannot
+    # collide with the single quotes that wrap the whole -c program in sh.
+    pin = json.dumps(cand_pin)
     cmd = (
         "cd {work} || exit 0; "
         "if python -c 'import pydantic_core; "
