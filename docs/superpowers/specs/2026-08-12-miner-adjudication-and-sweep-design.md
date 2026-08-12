@@ -105,7 +105,7 @@ wins, top to bottom.
 | # | condition | status | whose failure |
 |---|---|---|---|
 | 1 | commit changed no test files | `rejected:unchanged` | commit |
-| 2 | every touched test removed by our non-pytest filter | `rejected:no_runnable_tests` | commit¹ |
+| 2 | every touched test removed by our non-pytest filter | `not_minable:no_pytest_tests` | neither¹ |
 | 3 | touched tests existed at the parent, deleted by the commit | `rejected:no_runnable_tests` | commit |
 | 4 | targets empty for any other reason | `apparatus` | ours |
 | 5 | target probe itself failed | `error` | ours, transient |
@@ -120,8 +120,15 @@ wins, top to bottom.
 | 14 | tests that **ran and failed** after the patch | `rejected:regression_broken` | commit |
 | 15 | otherwise | `validated` (pass 2) / `pass1_ok` (pass 1) | — |
 
-¹ The reason names the matched config prefix, so a wrong filter entry is
-auditable rather than silently blaming the commit.
+¹ **Refined during planning, and it reverses a decision twice.** The previous
+phase's final review found this booking `rejected:unchanged` and called it
+Critical — our hand-maintained filter must never produce a verdict about a
+commit — so it was changed to `apparatus`. But `apparatus` is wrong too: our
+tooling did not fail, it correctly determined there is nothing pytest can run.
+`not_minable:` is the honest third answer, and it removes a live distortion —
+3 of 2025Q3's 10 apparatus cases are this, inflating the rate the tripwire
+reads. The reason still names the matched config prefix, so a wrong filter
+entry stays auditable.
 
 ### 4.1 Row 9 above rows 10–12
 
@@ -204,6 +211,7 @@ validated  pass1_ok
 rejected:unchanged  rejected:no_runnable_tests  rejected:base_import_blocked
 rejected:unstable   rejected:regression_broken
 not_minable:foreign_project  not_minable:straddles_dependency_bump
+not_minable:no_pytest_tests
 apparatus  error
 ```
 
@@ -298,7 +306,7 @@ a test. Recorded expectations:
 | `3a7fe26a` | `rejected:base_import_blocked` / `missing_symbol` |
 | `eea593b0`, `0801aebc` | `not_minable:foreign_project` |
 | `7c40924a`, `ac4f3ccb` | `not_minable:straddles_dependency_bump` |
-| `9b438b49`, `dac3c437`, `568509c0` | `rejected:no_runnable_tests` |
+| `9b438b49`, `dac3c437`, `568509c0` | `not_minable:no_pytest_tests` |
 | `f7a9b735` | `validated` — its recorded `broken` set was 7 vanished and **0 actually failed**, and its 3 oracle tests reproduced 1:1 in pass 2 |
 
 A divergence from any row above is a finding to diagnose and write down, not a
