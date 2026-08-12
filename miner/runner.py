@@ -649,6 +649,27 @@ def validate_quarter(quarter, limit, keep_images, force):
         print(f"nothing to do for {quarter}")
         return {}
 
+    counts: dict = {}
+    not_minable = [c for c in queue if c.get("not_minable")]
+    queue = [c for c in queue if not c.get("not_minable")]
+    for cand in not_minable:
+        reason = cand["not_minable"]
+        rec = dict(cand)
+        rec["status"] = f"not_minable:{reason}"
+        rec["before_failed"] = None
+        rec["reason"] = f"not_minable:{reason}"
+        # Use same write path as normal candidates but before Docker exists;
+        # anchor fields are None/unanchored at this early stage and will be
+        # overwritten by write() after image build for normal candidates, but
+        # these records never reach that write(). Keep anchored explicit.
+        rec["anchored"] = False
+        rec["anchor"] = None
+        record.append(record.VALIDATED, rec)
+        counts[rec["status"]] = counts.get(rec["status"], 0) + 1
+        print(f"  {cand['sha'][:8]} {rec['status']} {rec.get('reason') or ''}")
+    if not queue:
+        return counts
+
     # build_quarter_image returns a QuarterImage, and `skip` is the difference
     # between "this quarter has nothing to mine" (a verdict) and "the build
     # broke" (apparatus). Collapsing the two is exactly the confusion the
@@ -657,7 +678,7 @@ def validate_quarter(quarter, limit, keep_images, force):
     if img.tag is None:
         if img.skip:
             print(f"{quarter}: {img.reason}; nothing to mine here")
-            return {}
+            return counts
         raise SystemExit(
             f"image build failed for {quarter}: {img.reason}; "
             f"see {record.LOGS / f'build-{quarter}.log'}")
@@ -675,7 +696,6 @@ def validate_quarter(quarter, limit, keep_images, force):
         quarters.stop_container(cid)
         raise SystemExit(f"{quarter}: {err}")
 
-    counts = {}
     try:
         def write(rec):
             # The single point at which a record reaches disk, so that the

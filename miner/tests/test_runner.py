@@ -413,18 +413,17 @@ def test_a_patch_write_failure_is_error_and_a_bad_patch_is_apparatus(
 
 
 def test_our_own_path_filter_is_apparatus_not_a_verdict(monkeypatch):
-    # THE LIVE DEFECT. dac3c437 and 568509c0 are on disk as terminal
-    # `rejected:unchanged` records because their only test path lived under
-    # tests/typechecking/ -- OUR hand-maintained NON_PYTEST_TEST_DIRS filter,
-    # which candidates.py's own comment says must never become a verdict about
-    # the commit.
+    # Task 4: EMPTY_FILTERED is now not_minable:no_pytest_tests (a property of
+    # the commit under our NON_PYTEST_TEST_DIRS policy), not apparatus. The old
+    # rejected:unchanged records for dac3c437/568509c0 were the defect this
+    # retires. Kept name as transition pin; see adjudicate 1e2e919.
     rec = _measure(
         monkeypatch, before={}, after={}, pass2=False,
         runnable=runner.RunnableTargets(
             [], None, runner.EMPTY_FILTERED,
             "every touched test path was dropped by OUR "
             "candidates.NON_PYTEST_TEST_DIRS filter: tests/typechecking/x.py"))
-    assert rec["status"] == "apparatus"
+    assert rec["status"] == "not_minable:no_pytest_tests"
     assert "tests/typechecking/x.py" in rec["reason"]
 
 
@@ -459,12 +458,15 @@ def test_an_unrecognised_empty_reason_falls_to_apparatus(monkeypatch):
 
 def test_a_commit_that_deleted_its_tests_is_the_only_unchanged_verdict(
         monkeypatch):
+    # Task 4: EMPTY_DELETED is now rejected:no_runnable_tests (the one filter-
+    # empty cause that is a verdict about the commit), distinct from generic
+    # rejected:unchanged. Kept name as transition pin; see adjudicate 1e2e919.
     rec = _measure(
         monkeypatch, before={}, after={}, pass2=False,
         runnable=runner.RunnableTargets(
             [], None, runner.EMPTY_DELETED,
             "the commit deletes every test file it touches: tests/test_a.py"))
-    assert rec["status"] == "rejected:unchanged"
+    assert rec["status"] == "rejected:no_runnable_tests"
     assert "deletes every test file" in rec["reason"]
 
 
@@ -624,3 +626,111 @@ def test_a_crashed_before_session_books_apparatus(monkeypatch, tmp_path):
     rec = runner._measure("cid", cand, "repo", out, "/work/x", False)
     assert rec["status"] == "apparatus"
     assert "before report" in rec["reason"]
+
+
+# --------------------------------------------------------------------------
+# Task 4b: not_minable candidates are recorded before any Docker work.
+# --------------------------------------------------------------------------
+
+def test_validate_quarter_all_not_minable_short_circuits_before_docker(monkeypatch, tmp_path):
+    cand1 = {"sha": "a" * 40, "parent": "b" * 40, "quarter": "2025Q3",
+             "files": ["pydantic/main.py"], "not_minable": "foreign_project"}
+    cand2 = {"sha": "c" * 40, "parent": "d" * 40, "quarter": "2025Q3",
+             "files": ["pydantic/main.py"], "not_minable": "straddles_dependency_bump"}
+    candidates_path = tmp_path / "candidates.jsonl"
+    validated_path = tmp_path / "validated.jsonl"
+    candidates_path.write_text(
+        "\n".join(json.dumps(c) for c in [cand1, cand2]) + "\n", encoding="utf-8")
+    monkeypatch.setattr(runner.record, "CANDIDATES", candidates_path)
+    monkeypatch.setattr(runner.record, "VALIDATED", validated_path)
+    monkeypatch.setattr(runner.record, "LOGS", tmp_path / "logs")
+    monkeypatch.setattr(runner.record, "REPO", tmp_path / "repo")
+    monkeypatch.setattr(runner.quarters, "preflight", lambda: None)
+
+    def fail_build(*a, **k):
+        raise AssertionError("build_quarter_image must not be called when all queue entries are not_minable")
+    monkeypatch.setattr(runner.quarters, "build_quarter_image", fail_build)
+    monkeypatch.setattr(runner.quarters, "start_container",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("start_container must not be called")))
+    monkeypatch.setattr(runner.quarters, "install_reporter",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("install_reporter must not be called")))
+    monkeypatch.setattr(runner.quarters, "stop_container",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("stop_container must not be called")))
+    monkeypatch.setattr(runner.quarters, "remove_image",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("remove_image must not be called")))
+    monkeypatch.setattr(runner, "validate_one",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("validate_one must not be called")))
+
+    counts = runner.validate_quarter("2025Q3", limit=10, keep_images=False, force=False)
+
+    assert counts == {"not_minable:foreign_project": 1, "not_minable:straddles_dependency_bump": 1}
+    lines = [l for l in validated_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines) == 2
+    recs = {json.loads(l)["sha"]: json.loads(l) for l in lines}
+    for cand in [cand1, cand2]:
+        rec = recs[cand["sha"]]
+        assert rec["status"] == f"not_minable:{cand['not_minable']}"
+        assert rec["before_failed"] is None
+        assert cand["not_minable"] in rec["reason"]
+        assert rec["quarter"] == cand["quarter"]
+        assert rec["files"] == cand["files"]
+        # preserves candidate fields
+        assert rec["not_minable"] == cand["not_minable"]
+
+
+def test_validate_quarter_mixed_queue_only_not_minable_before_docker(monkeypatch, tmp_path):
+    cand_bad = {"sha": "a" * 40, "parent": "b" * 40, "quarter": "2025Q3",
+                "files": ["pydantic/main.py"], "not_minable": "foreign_project"}
+    cand_ok = {"sha": "c" * 40, "parent": "d" * 40, "quarter": "2025Q3",
+               "files": ["tests/test_a.py", "pydantic/main.py"]}
+    candidates_path = tmp_path / "candidates.jsonl"
+    validated_path = tmp_path / "validated.jsonl"
+    candidates_path.write_text(
+        "\n".join(json.dumps(c) for c in [cand_bad, cand_ok]) + "\n", encoding="utf-8")
+    monkeypatch.setattr(runner.record, "CANDIDATES", candidates_path)
+    monkeypatch.setattr(runner.record, "VALIDATED", validated_path)
+    monkeypatch.setattr(runner.record, "LOGS", tmp_path / "logs")
+    monkeypatch.setattr(runner.record, "REPO", tmp_path / "repo")
+    monkeypatch.setattr(runner.quarters, "preflight", lambda: None)
+
+    Img = namedtuple("Img", "tag anchored anchor skip reason")
+    fake_img = Img(tag="benchme:2025q3", anchored=True, anchor="abc", skip=False, reason="")
+    calls = {"build": 0, "start": 0, "install": 0, "validate_one": [], "stop": 0, "remove": 0}
+
+    def fake_build(*a, **k):
+        calls["build"] += 1
+        return fake_img
+    monkeypatch.setattr(runner.quarters, "build_quarter_image", fake_build)
+    monkeypatch.setattr(runner.quarters, "start_container", lambda *a, **k: (calls.__setitem__("start", calls["start"] + 1), "cid123")[1])
+    monkeypatch.setattr(runner.quarters, "install_reporter", lambda *a, **k: (calls.__setitem__("install", calls["install"] + 1), None)[1])
+    monkeypatch.setattr(runner.quarters, "stop_container", lambda *a, **k: calls.__setitem__("stop", calls["stop"] + 1))
+    monkeypatch.setattr(runner.quarters, "remove_image", lambda *a, **k: calls.__setitem__("remove", calls["remove"] + 1))
+
+    def fake_validate_one(cid, cand, repo, anchored, pass2=False, pass1_f2p=None):
+        calls["validate_one"].append(cand["sha"])
+        out = dict(cand)
+        out["anchored"] = anchored
+        out["pass"] = 2 if pass2 else 1
+        out["before_failed"] = 1
+        out["status"] = "pass1_ok"
+        out["reason"] = None
+        out["f2p"] = ["tests/test_a.py::test_one"]
+        return out
+    monkeypatch.setattr(runner, "validate_one", fake_validate_one)
+
+    counts = runner.validate_quarter("2025Q3", limit=10, keep_images=False, force=False)
+
+    # not_minable was recorded, Docker was still used for the good candidate
+    assert calls["build"] == 1
+    assert calls["start"] == 1
+    assert calls["install"] == 1
+    assert cand_bad["sha"] not in calls["validate_one"]
+    assert cand_ok["sha"] in calls["validate_one"]
+    assert counts.get("not_minable:foreign_project") == 1
+    lines = [l for l in validated_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    recs = {json.loads(l)["sha"]: json.loads(l) for l in lines}
+    assert recs[cand_bad["sha"]]["status"] == "not_minable:foreign_project"
+    assert recs[cand_bad["sha"]]["before_failed"] is None
+    assert "foreign_project" in recs[cand_bad["sha"]]["reason"]
+    # good candidate was also recorded (via fake_validate_one)
+    assert cand_ok["sha"] in recs
