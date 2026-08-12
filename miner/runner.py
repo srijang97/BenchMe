@@ -602,10 +602,11 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
     # verdicts silently. Under `--continue-on-collection-errors` a file that
     # imports on the before side and not on the after side does not FAIL -- its
     # tests simply cease to exist. Every previously-passing node in it then
-    # vanishes, misses outcomes.diff's exact-swap rename rule, lands in
-    # `broken`, and books `rejected:regression_broken` claiming those tests
-    # "fail after the code patch", which is false: they were never run. The two
-    # sides were not measured comparably, so NO comparison between them is
+    # vanishes, and outcomes.diff's exact-swap rename rule cannot reconcile it
+    # unless the after side gained the same number of new passing ids -- a
+    # vanished id that the rule does not excuse is `vanished`, never `broken`,
+    # and `broken` is reserved for tests that RAN AND FAILED. But the two sides
+    # still were not measured comparably, so NO comparison between them is
     # honest -- apparatus, ours, not a verdict about the commit.
     #
     # Only errors NEW to the after side count. A collection error present on

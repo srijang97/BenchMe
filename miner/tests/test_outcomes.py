@@ -287,6 +287,25 @@ def test_diff_routes_a_marker_skip_added_by_the_patch_to_skipped_after():
     assert d["broken"] == []
 
 
+def test_diff_routes_an_after_error_to_skipped_after_not_broken():
+    # REVIEW FOLLOW-UP (Task 3): `broken` is reserved for tests that RAN AND
+    # FAILED. A node that was PASSED before and is an ERROR after did not run
+    # to a failure -- its fixture or teardown blew up, so it never asserted --
+    # and it is present after, so it is not `vanished` either. It is the
+    # after-side execution-non-success case and lands in the visible
+    # `skipped_after` bucket (SKIPPED or ERROR), which stays on the record
+    # without booking a regression. An unrestricted fallback previously
+    # routed it into `broken` and booked `rejected:regression_broken` for a
+    # test that never failed.
+    before = {"t.py::a": outcomes.PASSED}
+    after = {"t.py::a": outcomes.ERROR}
+    d = outcomes.diff(before, after)
+    assert d["broken"] == []
+    assert d["vanished"] == []
+    assert d["skipped_after"] == ["t.py::a"]
+    assert d["p2p"] == []
+
+
 def test_label_bare_assert():
     assert outcomes.label("assert 1 == 2") == "assertion"
 

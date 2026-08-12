@@ -270,10 +270,13 @@ def diff(before, after):
     error_base    -- could not run before, PASSED after. Not admissible as an
                       oracle (decision 2), but counted so the cost of that
                       gate is measurable.
-    skipped_after -- PASSED before, SKIPPED after. Not a regression -- the
-                      test did not fail -- but suspicious enough (a patch
-                      that skips a previously-passing test) to stay visible
-                      rather than being folded into `broken` or dropped.
+    skipped_after -- PASSED before and an execution non-success after: the
+                      after side reports SKIPPED or ERROR. The node ran to
+                      neither a pass nor a failure -- a marker skip, a
+                      fixture/teardown blow-up -- so it is not a regression,
+                      but a patch that newly skips (or breaks the setup of) a
+                      previously-passing test stays visible rather than being
+                      folded into `broken` or dropped.
 
     Why renames are reconciled at all: pydantic parametrises one test on
     source line numbers, so applying the code patch renumbers the ids without
@@ -303,7 +306,9 @@ def diff(before, after):
     which is the honest trigger and does not depend on counting. `broken` is
     therefore reserved for tests that RAN and FAILED; ambiguity between a
     rename and a genuine loss resolves toward `vanished` now, and the
-    regression verdict is decided by `broken` alone.
+    regression verdict is decided by `broken` alone. An after-side ERROR is
+    not a failure either -- the node did not run its assertions -- so it
+    joins `skipped_after` as a visible execution non-success, never `broken`.
     """
     f2p, p2p, broken = [], [], []
     renamed, vanished, error_base, skipped_after = [], [], [], []
@@ -339,7 +344,7 @@ def diff(before, after):
                 else:
                     vanished.append(nodeid)
             else:
-                broken.append(nodeid)
+                skipped_after.append(nodeid)
     return {"f2p": sorted(f2p), "p2p": sorted(p2p), "broken": sorted(broken),
             "renamed": sorted(renamed), "vanished": sorted(vanished),
             "error_base": sorted(error_base),

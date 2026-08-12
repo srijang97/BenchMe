@@ -450,9 +450,10 @@ def _regressions(out, done):
     `outcomes.diff` books a node id that PASSED before and is ABSENT after as
     `renamed` when the exact-swap rule holds -- within that test function, the
     after side gained exactly as many newly-passing ids as it lost, so the
-    disappearance reconciles as a renumbering -- and as `broken` otherwise, on
-    the reasoning that a collection crash makes a test vanish rather than
-    fail. It is no longer unconditionally booked as broken.
+    disappearance reconciles as a renumbering -- and as `vanished` otherwise,
+    on the reasoning that a collection crash makes a test vanish rather than
+    fail. `broken` holds only ids that RAN AND FAILED after the patch; absent
+    ids are never booked as broken.
     The rename case is real: pydantic's
     `test_docs.py::test_docstrings_examples` parametrises on the source line
     range of each docstring example, so any code patch that shifts lines in a
@@ -462,13 +463,15 @@ def _regressions(out, done):
 
     The exact-swap rule is a heuristic, so this audit stays: a `broken` set
     that is entirely absent from the after log is a rename the rule did not
-    catch.
+    catch. An absent id now books `vanished` rather than `broken`, so this
+    audit is a belt-and-braces check rather than the primary routing.
 
     This section does not change any verdict. It reports, per record, how many
     broken ids were genuinely present-and-failing in the after log versus
     absent from it entirely, so a reader can see which regression verdicts are
-    real. A record whose broken set is entirely vanished is apparatus wearing a
-    verdict, and the reader -- not this renderer -- decides what to do.
+    real. A record whose broken set is entirely absent from the after log is
+    apparatus wearing a verdict, and the reader -- not this renderer --
+    decides what to do.
     """
     regs = [d for d in done if d["status"] == "rejected:regression_broken"]
     out += ["## `regression_broken` audit: real failure or vanished node id?",
