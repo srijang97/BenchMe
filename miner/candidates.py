@@ -77,7 +77,7 @@ def exact_pins(pyproject_text):
     return {n: v for n, v in _PIN.findall(pyproject_text or "")}
 
 
-def not_minable_reason(repo_name, parent_toml, commit_toml):
+def not_minable_reason(repo_name, parent_toml, commit_toml, test_files=None):
     """Why this candidate is outside what the method can measure, or None."""
     expected = EXPECTED_PROJECT.get(repo_name)
     if expected:
@@ -88,6 +88,10 @@ def not_minable_reason(repo_name, parent_toml, commit_toml):
     for name, version in after.items():
         if name in before and before[name] != version:
             return "straddles_dependency_bump"
+    if test_files:
+        test_py = [f for f in test_files if metrics.is_test_file(f)]
+        if test_py and all(is_non_pytest_test(repo_name, f) for f in test_py):
+            return "no_pytest_tests"
     return None
 
 
@@ -292,6 +296,7 @@ def enumerate_candidates(repo):
             repo_name,
             tomls[f"{r['parent']}:pyproject.toml"],
             tomls[f"{r['sha']}:pyproject.toml"],
+            test_files=r["test_files"],
         )
         if reason:
             r["not_minable"] = reason

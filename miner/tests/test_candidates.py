@@ -56,3 +56,11 @@ def test_a_changed_range_dependency_is_not_a_boundary():
 
 def test_an_unknown_repo_filters_nothing():
     assert candidates.not_minable_reason("somethingelse", CORE, CORE) is None
+
+
+def test_no_pytest_tests_is_not_minable():
+    """A candidate whose test_files are exclusively in NON_PYTEST_TEST_DIRS is not_minable:no_pytest_tests."""
+    files = ["tests/typechecking/fields.py", "tests/typechecking/secret.py"]
+    assert candidates.not_minable_reason("pydantic", PYDANTIC, PYDANTIC, test_files=files) == "no_pytest_tests"
+    mixed = ["tests/typechecking/fields.py", "tests/test_main.py"]
+    assert candidates.not_minable_reason("pydantic", PYDANTIC, PYDANTIC, test_files=mixed) is None
