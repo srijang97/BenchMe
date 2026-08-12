@@ -104,9 +104,11 @@ class ContainerLost(Exception):
 
 
 def _guard(proc, what):
-    """Turn an exec timeout into ContainerLost; otherwise hand the result back."""
+    """Turn an exec timeout or lost container into ContainerLost; otherwise hand the result back."""
     if proc.returncode == tierb.TIMEOUT_RETURNCODE:
         raise ContainerLost(f"{what} timed out; container is not reusable")
+    if proc.returncode != 0 and "No such container" in (proc.stderr or ""):
+        raise ContainerLost(f"container lost during {what}: {proc.stderr.strip()}")
     return proc
 
 
@@ -178,6 +180,9 @@ def _apply(container, workdir, patch_text, label):
         input=patch_text.encode("utf-8"), capture_output=True,
         env=tierb.docker_env())
     if proc.returncode != 0:
+        err_text = proc.stderr.decode("utf-8", "replace")
+        if "No such container" in err_text:
+            raise ContainerLost(f"container lost during {label} patch write: {err_text.strip()}")
         # Transient: see the docstring. `error`, not apparatus.
         return Failure("error",
                        f"could not write {label} patch into the container "

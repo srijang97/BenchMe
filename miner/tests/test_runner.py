@@ -1034,3 +1034,14 @@ def test_wheels_download_cmd_skips_not_minable_and_bad_lines(tmp_path,
     assert "pip download" in cmd
     # A quarter with no pinned candidates must not emit a wheel layer.
     assert runner.quarters._wheels_download_cmd("2020Q1") == ""
+
+
+def test_guard_raises_container_lost_on_no_such_container():
+    import pytest
+    class Proc:
+        returncode = 1
+        stdout = ""
+        stderr = "Error response from daemon: No such container: abc123"
+    with pytest.raises(runner.ContainerLost) as exc_info:
+        runner._guard(Proc(), "test_op")
+    assert "container lost during test_op" in str(exc_info.value)
