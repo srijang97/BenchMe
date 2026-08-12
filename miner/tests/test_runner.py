@@ -1008,7 +1008,7 @@ def test_wheels_download_cmd_builds_uv_download(tmp_path, monkeypatch):
     cmd = runner.quarters._wheels_download_cmd("2026Q3")
     assert "pydantic-core==2.47.0" in cmd
     assert "pydantic-core==2.48.0" in cmd
-    assert "uv pip download" in cmd
+    assert "pip download" in cmd
 
 
 def test_wheels_download_cmd_skips_not_minable_and_bad_lines(tmp_path,
@@ -1035,6 +1035,6 @@ def test_wheels_download_cmd_skips_not_minable_and_bad_lines(tmp_path,
     assert "pydantic-core==2.47.0" in cmd
     assert "pydantic-core==2.48.0" not in cmd  # not_minable: no wheel needed
     assert "2.30.0" not in cmd                  # other quarter
-    assert "uv pip download" in cmd
+    assert "pip download" in cmd
     # A quarter with no pinned candidates must not emit a wheel layer.
     assert runner.quarters._wheels_download_cmd("2020Q1") == ""

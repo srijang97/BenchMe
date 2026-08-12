@@ -489,7 +489,7 @@ def _wheels_download_cmd(quarter):
         errored and retried. Failing here names the cause once, at build
         time, the same way the pydantic / pydantic_core guards in the
         Dockerfile do.
-      * the container runs --network none, so `uv pip download` must reach
+      * the container runs --network none, so `pip download` must reach
         PyPI from inside the BUILD (builds keep network; the runtime
         container does not). That is exactly the split this layer encodes.
 
@@ -518,5 +518,5 @@ def _wheels_download_cmd(quarter):
                     pins.add(c["core_pin"])
     if pins:
         pkgs = " ".join(f"pydantic-core=={p}" for p in sorted(pins))
-        return f"RUN uv pip download --dest /opt/miner/wheels {pkgs}"
+        return f"RUN pip download --dest /opt/miner/wheels {pkgs}"
     return ""
