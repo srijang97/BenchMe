@@ -50,6 +50,47 @@ def is_non_pytest_test(repo_name, path):
                for prefix in NON_PYTEST_TEST_DIRS.get(repo_name, ()))
 
 
+# Explicit per-repo, never inferred. A heuristic that guessed wrong would
+# silently drop real candidates, which is the failure class this whole phase
+# exists to remove.
+EXPECTED_PROJECT = {"pydantic": "pydantic"}
+
+_NAME = re.compile(r"""^\s*name\s*=\s*['"]([^'"]+)['"]""", re.M)
+_PIN = re.compile(r"""['"]([A-Za-z0-9._-]+)==([0-9][^'"]*)['"]""")
+
+
+def project_name(pyproject_text):
+    """The [project] name, or None when there is no pyproject.toml at all.
+
+    None is NOT foreignness: pydantic v1 predates pyproject.toml entirely.
+    """
+    m = _NAME.search(pyproject_text or "")
+    return m.group(1) if m else None
+
+
+def exact_pins(pyproject_text):
+    """{name: version} for `name==version` pins only.
+
+    Ranges are excluded deliberately. A `>=` bound that moves does not force a
+    different environment; an exact pin does.
+    """
+    return {n: v for n, v in _PIN.findall(pyproject_text or "")}
+
+
+def not_minable_reason(repo_name, parent_toml, commit_toml):
+    """Why this candidate is outside what the method can measure, or None."""
+    expected = EXPECTED_PROJECT.get(repo_name)
+    if expected:
+        actual = project_name(commit_toml)
+        if actual is not None and actual.replace("-", "_") != expected.replace("-", "_"):
+            return "foreign_project"
+    before, after = exact_pins(parent_toml), exact_pins(commit_toml)
+    for name, version in after.items():
+        if name in before and before[name] != version:
+            return "straddles_dependency_bump"
+    return None
+
+
 def quarter_of(iso_date):
     year = int(iso_date[0:4])
     month = int(iso_date[5:7])
@@ -113,6 +154,67 @@ def _numstat(repo, parent, sha, paths):
     return added, deleted
 
 
+def _read_pyprojects(repo, pairs):
+    """pyproject.toml text at each parent and commit, in ONE batched call.
+
+    Returns {spec: text} where spec is "<rev>:pyproject.toml" and text is ""
+    when that tree has no pyproject.toml. Absence is NOT foreignness (pydantic
+    v1 predates pyproject.toml entirely) and NOT a pin change; the caller's
+    negative tests depend on "" flowing through exactly like a real file.
+
+    Raises RuntimeError on any shape the batch cannot vouch for. The clone is
+    blobless (--filter=blob:none), so a blob that is not local is fetched
+    lazily on demand; if the promisor is unreachable the batch dies partway,
+    and returning the partial map would read the missing entries as "no
+    pyproject.toml" -- silently dropping the very candidates this filter
+    exists to count. The size-delimited parse also means a truncated batch is
+    detected rather than mis-read.
+    """
+    specs = [f"{rev}:pyproject.toml" for parent, sha in pairs
+             for rev in (parent, sha)]
+    proc = subprocess.run(
+        ["git", "cat-file", "--batch"], cwd=str(repo),
+        input=("\n".join(specs) + "\n").encode("utf-8"), capture_output=True)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"git cat-file --batch failed (rc={proc.returncode}) reading "
+            f"{len(specs)} pyproject.toml paths: "
+            f"{proc.stderr.decode('utf-8', 'replace').strip()[:500]}")
+    blobs = {}
+    stream = proc.stdout
+    pos = 0
+    for spec in specs:
+        end = stream.find(b"\n", pos)
+        if end == -1:
+            raise RuntimeError("git cat-file --batch output truncated before "
+                               f"a header for {spec!r}")
+        header = stream[pos:end]
+        pos = end + 1
+        if header.endswith(b" missing"):
+            blobs[spec] = ""
+            continue
+        parts = header.split(b" ")
+        if len(parts) != 3 or parts[1] != b"blob":
+            raise RuntimeError(
+                f"unexpected git cat-file --batch header {header!r} for "
+                f"{spec!r}")
+        try:
+            size = int(parts[2])
+        except ValueError:
+            raise RuntimeError(
+                f"unparseable blob size in {header!r} for {spec!r}")
+        body = stream[pos:pos + size]
+        if len(body) != size:
+            raise RuntimeError(
+                f"git cat-file --batch returned {len(body)} of {size} bytes "
+                f"for {spec!r}; the blobless clone's lazy fetch likely failed")
+        blobs[spec] = body.decode("utf-8", errors="replace")
+        pos += size
+        if stream[pos:pos + 1] == b"\n":
+            pos += 1
+    return blobs
+
+
 def enumerate_candidates(repo):
     commits = gitmeta.log_commits(repo)
 
@@ -122,6 +224,7 @@ def enumerate_candidates(repo):
     # not. Cheap to record, impossible to reconstruct after the fact.
     repo_head = gitmeta.head_sha(repo)
     commits_total = len(commits)
+    repo_name = Path(repo).name
 
     reverted_subjects = set()
     for c in commits:
@@ -176,6 +279,22 @@ def enumerate_candidates(repo):
             "reverted_later": c.subject.strip() in reverted_subjects,
             "status": "enumerated",
         })
+
+    # Foreign-project and dependency-boundary filters. One batched read for
+    # the whole candidate list -- 1,568 individual git-show calls is minutes
+    # of avoidable work -- then stamp each candidate that is outside what the
+    # method can measure. The stamp is COUNTED, never a silent drop: the
+    # validator skips a candidate carrying the not_minable field and writes a
+    # record with status=f"not_minable:{reason}", so it stays in the funnel.
+    tomls = _read_pyprojects(repo, [(r["parent"], r["sha"]) for r in out])
+    for r in out:
+        reason = not_minable_reason(
+            repo_name,
+            tomls[f"{r['parent']}:pyproject.toml"],
+            tomls[f"{r['sha']}:pyproject.toml"],
+        )
+        if reason:
+            r["not_minable"] = reason
     return out
 
 
