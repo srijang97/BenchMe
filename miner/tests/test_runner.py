@@ -946,16 +946,10 @@ def test_align_core_pin_uses_exec_in_and_offline_install(monkeypatch):
     assert argv[0] == "sh"
     assert argv[1] == "-c"
     cmd = argv[2]
-    # The version check: only install when the installed core differs.
-    assert "pydantic_core.__version__" in cmd
-    # The version literal inside the python -c program must be DOUBLE-quoted:
-    # the whole program is wrapped in single quotes by sh, so a single-quoted
-    # literal would terminate the -c argument early and the check would be
-    # silently malformed (the exact quoting trap this pins).
-    assert '"2.47.0"' in cmd
-    # The offline install of the candidate's exact pin.
-    assert "--no-index" in cmd
-    assert "--find-links /opt/miner/wheels" in cmd
+    # Idempotent offline install of the candidate's exact pin. No version
+    # probe: nested quoting under sh -c / docker exec corrupts the string
+    # literal on this host, and pip is idempotent when already aligned.
+    assert "uv pip install --system --no-index --find-links /opt/miner/wheels" in cmd
     assert "pydantic-core==2.47.0" in cmd
 
 

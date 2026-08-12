@@ -795,15 +795,18 @@ def _align_core_pin(container, workdir, cand_pin):
     # on the command line; inside the python -c program it is a Python string
     # literal. json.dumps renders a double-quoted literal, which cannot
     # collide with the single quotes that wrap the whole -c program in sh.
-    pin = json.dumps(cand_pin)
+    # Always attempt the offline install. pip/uv is idempotent: when the
+    # installed version already equals the pin, `uv pip install
+    # pydantic-core==X` is a no-op (resolves in ~1ms, reinstall 0.7ms).
+    # Deliberately NO version probe: the probe needs a nested-quoted
+    # python -c under sh -c under docker exec, and the quote layers
+    # corrupt the string literal on this host (measured: "Unterminated
+    # quoted string"). The install itself is the check.
     cmd = (
         "cd {work} || exit 0; "
-        "if python -c 'import pydantic_core; "
-        "exit(0 if pydantic_core.__version__ == {pin} else 1)' "
-        "2>/dev/null; then exit 0; fi; "
         "uv pip install --system --no-index --find-links /opt/miner/wheels "
         "pydantic-core=={version} >/dev/null 2>&1"
-    ).format(work=work, pin=pin, version=cand_pin)
+    ).format(work=work, version=cand_pin)
     r = _guard(quarters.exec_in(container, ["sh", "-c", cmd], timeout=300),
                f"align pydantic-core to {cand_pin}")
     if r.returncode != 0:
