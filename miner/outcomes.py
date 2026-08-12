@@ -259,12 +259,14 @@ def diff(before, after):
     f2p           -- FAILURE before, PASSED after. The oracle. Requires an
                       exact node id match on both sides.
     p2p           -- PASSED on both. The regression set.
-    broken        -- PASSED before, and after either FAILURE, ERROR, or gone,
-                      where a disappearance is not explained by an exact
-                      rename swap.
+    broken        -- PASSED before and FAILURE after. RAN AND FAILED. The
+                      regression set.
     renamed       -- PASSED before and gone after, reconciled against an
                       equal-sized batch of newly-appeared passing cases under
                       the same test function. Reported, not penalised.
+    vanished      -- PASSED before and gone after, where the disappearance is
+                      not explained by an exact rename swap. Never a
+                      regression on its own.
     error_base    -- could not run before, PASSED after. Not admissible as an
                       oracle (decision 2), but counted so the cost of that
                       gate is measurable.
@@ -290,13 +292,21 @@ def diff(before, after):
     add are genuinely indistinguishable, so the equal-counts tie-break is a
     deliberate choice, not an oversight: it recognises the measured pydantic
     case (a patch shifts source lines, every id under the base is renumbered,
-    the count is unchanged) while refusing the ambiguous ones. Ambiguity
-    resolves toward `broken`, i.e. toward rejecting the candidate, because a
-    false rejection only costs one candidate out of thousands whereas a false
-    admission puts a capsule with a real regression into the corpus.
+    the count is unchanged) while refusing the ambiguous ones.
+
+    Why the split between `renamed` and `vanished` exists at all: a vanished
+    id means the *reference patch* reshaped the id space, which is a property
+    of the commit. It is not an agent deleting a test to go green -- at mining
+    time the tests are fixed, and the graded agent cannot touch them. The case
+    where vanishing *is* breakage -- the patch broke a file's import, so all
+    its tests disappear -- is caught upstream by after-side collection errors,
+    which is the honest trigger and does not depend on counting. `broken` is
+    therefore reserved for tests that RAN and FAILED; ambiguity between a
+    rename and a genuine loss resolves toward `vanished` now, and the
+    regression verdict is decided by `broken` alone.
     """
     f2p, p2p, broken = [], [], []
-    renamed, error_base, skipped_after = [], [], []
+    renamed, vanished, error_base, skipped_after = [], [], [], []
 
     vanished_by_base = {}
     for nodeid, status in before.items():
@@ -327,9 +337,10 @@ def diff(before, after):
                 if vanished_by_base.get(key, 0) == appeared_by_base.get(key, 0):
                     renamed.append(nodeid)
                 else:
-                    broken.append(nodeid)
+                    vanished.append(nodeid)
             else:
                 broken.append(nodeid)
     return {"f2p": sorted(f2p), "p2p": sorted(p2p), "broken": sorted(broken),
-            "renamed": sorted(renamed), "error_base": sorted(error_base),
+            "renamed": sorted(renamed), "vanished": sorted(vanished),
+            "error_base": sorted(error_base),
             "skipped_after": sorted(skipped_after)}

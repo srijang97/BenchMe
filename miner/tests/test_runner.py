@@ -318,20 +318,26 @@ def test_pass2_regression_broken_reaches_the_record(monkeypatch):
     assert rec["broken"] == [C]
     # Finding 4b: the reason counts genuine failures and vanished ids apart.
     assert "1 previously-passing test(s) fail" in rec["reason"]
-    assert "0 vanished" in rec["reason"]
+    assert rec["vanished"] == []
+    # Vanished count is only mentioned when non-zero, so a reader cannot
+    # mistake an absent mention for a dropped count.
+    assert "vanished" not in rec["reason"]
 
 
-def test_regression_reason_does_not_call_a_vanished_node_a_failure(monkeypatch):
+def test_a_vanished_node_is_not_a_failure(monkeypatch):
     # C passed before and is ABSENT after -- no exact-swap rename to excuse it,
-    # so it is `broken`. It did not FAIL, though: saying so on the record was
-    # false about the one number a reader uses to judge the verdict.
+    # so it is `vanished`. It did not FAIL: it was never run on the after side,
+    # so booking a regression off it would claim failures that never happened.
+    # A vanished id alone must not yield `rejected:regression_broken`; the
+    # oracle reproduced, so the verdict is validated and the vanished id stays
+    # on the record.
     rec = _measure(monkeypatch,
                    before={A: outcomes.FAILURE, C: outcomes.PASSED},
                    after={A: outcomes.PASSED},
                    pass1_f2p=[A])
-    assert rec["status"] == "rejected:regression_broken"
-    assert "0 previously-passing test(s) fail" in rec["reason"]
-    assert "1 vanished" in rec["reason"]
+    assert rec["status"] == "validated"
+    assert rec["vanished"] == [C]
+    assert rec["broken"] == []
 
 
 def test_a_collection_error_new_to_the_after_side_is_apparatus(monkeypatch):

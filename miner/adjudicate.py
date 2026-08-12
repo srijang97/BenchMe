@@ -203,12 +203,12 @@ def adjudicate(m):
     # Collection errors were recorded and then ignored, which let them decide
     # verdicts silently. Under `--continue-on-collection-errors` a file that
     # imports on the before side and not on the after side does not FAIL -- its
-    # tests simply cease to exist. They vanish, miss outcomes.diff's exact-swap
-    # rename rule, land in `broken`, and book `rejected:regression_broken`
-    # claiming those tests "fail after the code patch", which is false: they
-    # were never run. The two sides were not measured comparably, so NO
-    # comparison between them is honest -- apparatus, ours, not a verdict
-    # about the commit.
+    # tests simply cease to exist. They vanish, and even though outcomes.diff
+    # now routes absent ids to `vanished` rather than `broken`, a vanished id
+    # is still not evidence about the commit -- the node was never run on the
+    # after side, so nothing can be concluded from its absence. The two sides
+    # were not measured comparably, so NO comparison between them is honest --
+    # apparatus, ours, not a verdict about the commit.
     #
     # Only errors NEW to the after side count. A collection error present on
     # both sides is a constant of the environment: it removes the same nodes
@@ -228,6 +228,7 @@ def adjudicate(m):
         p2p_count=len(d["p2p"]),
         broken=d["broken"],
         renamed=d["renamed"],
+        vanished=d["vanished"],
         error_base=d["error_base"],
         skipped_after=d["skipped_after"],
         tests_seen=len(m.before),
@@ -425,18 +426,20 @@ def adjudicate(m):
             if t in set(fields["f2p"])}
 
     if m.pass2 and d["broken"]:
-        # Reported as two numbers, not one. A node id that is ABSENT from the
-        # after run did not fail -- it vanished, and "fail" is simply false
-        # about it. The two have different causes (a genuine regression versus
-        # a rename the exact-swap rule did not reconcile) and report._regressions
+        # `broken` is RAN AND FAILED only -- a vanished id never lands here, so
+        # every id in this arm is a genuine after-side failure. The reason
+        # states the failed count, and mentions the vanished count separately
+        # when non-zero: the two have different causes (a real regression
+        # versus a rename the exact-swap rule did not reconcile), and report._regressions
         # exists only because the recorded reason used to conflate them.
-        vanished = [n for n in d["broken"] if n not in m.after]
-        failed = [n for n in d["broken"] if n in m.after]
+        reason = (f"{len(d['broken'])} previously-passing test(s) fail after "
+                  f"the code patch")
+        if d["vanished"]:
+            reason += (f" and {len(d['vanished'])} test(s) vanished from the "
+                       f"after run")
         return Verdict(
             "rejected:regression_broken",
-            f"{len(failed)} previously-passing test(s) fail after the "
-            f"code patch and {len(vanished)} vanished from the after "
-            f"run (first: {d['broken'][0]})"[:300],
+            f"{reason} (first: {d['broken'][0]})"[:300],
             fields)
 
     return Verdict("validated" if m.pass2 else "pass1_ok", None, fields)

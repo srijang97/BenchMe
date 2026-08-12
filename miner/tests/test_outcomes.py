@@ -417,13 +417,50 @@ def test_diff_does_not_hide_a_real_loss_behind_a_rename():
     after = {"t.py::test_d[c]": outcomes.PASSED}
     d = outcomes.diff(before, after)
     assert d["renamed"] == []
-    assert d["broken"] == ["t.py::test_d[a]", "t.py::test_d[b]"]
+    assert d["broken"] == []
+    assert d["vanished"] == ["t.py::test_d[a]", "t.py::test_d[b]"]
 
 
 def test_diff_treats_a_wholly_vanished_test_as_broken():
     before = {"t.py::gone": outcomes.PASSED}
     after = {}
-    assert outcomes.diff(before, after)["broken"] == ["t.py::gone"]
+    d = outcomes.diff(before, after)
+    assert d["broken"] == []
+    assert d["vanished"] == ["t.py::gone"]
+
+
+def test_diff_separates_a_vanished_test_from_a_failed_one():
+    """`broken` means RAN AND FAILED. A test that is not there did not run, so
+    it is not evidence of breakage -- it is evidence the id space moved."""
+    before = {"t.py::failed": outcomes.PASSED, "t.py::gone": outcomes.PASSED}
+    after = {"t.py::failed": outcomes.FAILURE}
+    d = outcomes.diff(before, after)
+    assert d["broken"] == ["t.py::failed"]
+    assert d["vanished"] == ["t.py::gone"]
+
+
+def test_diff_still_reconciles_a_renumbered_parametrisation():
+    before = {"t.py::d[a.md:10-20]": outcomes.PASSED,
+              "t.py::d[a.md:30-40]": outcomes.PASSED}
+    after = {"t.py::d[a.md:8-18]": outcomes.PASSED,
+             "t.py::d[a.md:28-38]": outcomes.PASSED}
+    d = outcomes.diff(before, after)
+    assert d["renamed"] == ["t.py::d[a.md:10-20]", "t.py::d[a.md:30-40]"]
+    assert d["vanished"] == [] and d["broken"] == []
+
+
+def test_an_unreconciled_disappearance_is_vanished_not_broken():
+    """THE f7a9b735 / aa7705f7 CASE. Each edited markdown file deleted one code
+    example along with 12 lines of prose, so the counts did not balance and the
+    exact-swap rule could not reconcile. Before this change all of them booked
+    `broken` and produced 'N previously-passing tests fail' -- with N failures
+    that never happened."""
+    before = {"t.py::d[a.md:10-20]": outcomes.PASSED,
+              "t.py::d[a.md:30-40]": outcomes.PASSED}
+    after = {"t.py::d[a.md:8-18]": outcomes.PASSED}
+    d = outcomes.diff(before, after)
+    assert d["broken"] == []
+    assert sorted(d["vanished"]) == ["t.py::d[a.md:10-20]", "t.py::d[a.md:30-40]"]
 
 
 def test_diff_requires_an_exact_nodeid_match_for_f2p():
@@ -459,7 +496,8 @@ def test_diff_rename_reconciliation_requires_an_exact_swap():
              "t.py::test_a[4]": outcomes.PASSED}
     d = outcomes.diff(before, after)
     assert d["renamed"] == []
-    assert d["broken"] == ["t.py::test_a[2]"]
+    assert d["broken"] == []
+    assert d["vanished"] == ["t.py::test_a[2]"]
 
 
 def test_diff_routes_a_newly_skipped_test_to_its_own_bucket():

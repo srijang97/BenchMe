@@ -121,6 +121,26 @@ def test_pass2_regression_is_a_verdict():
     assert v.status == "rejected:regression_broken"
 
 
+def test_vanished_tests_alone_do_not_book_a_regression():
+    recs = [outcomes.Record("t.py::a", "call", "failed", "assert 1 == 2")]
+    v = adjudicate.adjudicate(_m(
+        pass2=True, pass1_f2p=["t.py::a"], before_records=recs,
+        before={"t.py::a": outcomes.FAILURE, "t.py::gone": outcomes.PASSED},
+        after={"t.py::a": outcomes.PASSED}))
+    assert v.status == "validated"
+    assert v.fields["vanished"] == ["t.py::gone"]
+
+
+def test_a_test_that_ran_and_failed_still_books_a_regression():
+    recs = [outcomes.Record("t.py::a", "call", "failed", "assert 1 == 2")]
+    v = adjudicate.adjudicate(_m(
+        pass2=True, pass1_f2p=["t.py::a"], before_records=recs,
+        before={"t.py::a": outcomes.FAILURE, "t.py::keep": outcomes.PASSED},
+        after={"t.py::a": outcomes.PASSED, "t.py::keep": outcomes.FAILURE}))
+    assert v.status == "rejected:regression_broken"
+    assert "1 previously-passing" in v.reason
+
+
 def test_pass1_before_collection_error_is_apparatus():
     # REMOVED blanket apparatus. Row 9 now beats the blanket: an oracle found
     # despite collection errors is pass1_ok, not apparatus. The truly empty
