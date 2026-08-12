@@ -571,29 +571,30 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
     # with the candidate's OWN target paths, so only an error in a file this
     # candidate depends on counts -- and it is deliberately left as follow-up
     # work rather than guessed at now. Pass 2 is not unguarded in the meantime:
-    # `new_collect` below still catches errors NEW to the after side, and
-    # adjudicate's determinism check still books apparatus for any oracle
+    # adjudicate's `new_collect` check still catches errors NEW to the after
+    # side, and its determinism check still books apparatus for any oracle
     # node the full-suite run did not measure, which is the shape a collection
     # error takes there.
-    if not pass2 and before_collect:
-        first = before_collect[0].nodeid
-        out.update(
-            status="apparatus",
-            reason=f"{len(before_collect)} of this candidate's own touched "
-                   f"test file(s) failed to collect on the before side, so "
-                   f"their tests never ran and the oracle cannot be trusted "
-                   f"to be absent for any reason but ours (first: "
-                   f"{first})"[:300])
-        return out
-
-    # Checked HERE, before the code patch and the second pytest invocation. A
-    # candidate with no before-side outcomes is already dead; running the full
-    # after pass to reach the same conclusion just buys a second full pytest
-    # run per dead candidate. The empty-after guard lives in adjudicate and
-    # cannot be known any earlier either: it needs the after run's outcome.
-    if not before:
-        out.update(status="apparatus",
-                   reason="no test outcomes on the before side")
+    #
+    # Delegated to adjudicate HERE -- immediately after the before run, before
+    # the code patch is applied -- because these two arms are decidable from
+    # the before side alone, and a candidate that is already dead must not pay
+    # for the second pytest invocation. `after` is passed empty: neither arm
+    # consults it, and the empty-after arm in adjudicate cannot fire ahead of
+    # the empty-before arm that sits above it. _measure only decides WHEN it
+    # has enough evidence to ask; the status and reason are adjudicate's.
+    if (not pass2 and before_collect) or not before:
+        verdict = adjudicate.adjudicate(adjudicate.Measurements(
+            pass2=pass2,
+            targets=selection,
+            before=before,
+            after={},
+            before_records=before_records,
+            before_collect=[r.nodeid for r in before_collect],
+            after_collect=[],
+            pass1_f2p=pass1_f2p))
+        out.update(status=verdict.status, reason=verdict.reason)
+        out.update(verdict.fields)
         return out
 
     fail = _apply(container, workdir, code_patch, "code")
@@ -622,16 +623,10 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
     # Only errors NEW to the after side count. A collection error present on
     # both sides is a constant of the environment: it removes the same nodes
     # from both maps and the diff stays symmetric.
-    new_collect = sorted({r.nodeid for r in after_collect}
-                         - {r.nodeid for r in before_collect})
-    if new_collect:
-        out.update(
-            status="apparatus",
-            reason=f"{len(new_collect)} file(s) failed to collect after the "
-                   f"code patch but not before it, so the two sides were not "
-                   f"measured comparably and no regression verdict is honest "
-                   f"(first: {new_collect[0]})"[:300])
-        return out
+    #
+    # This arm now lives in adjudicate (its `new_collect` check), reached by
+    # the single Measurements built below. _measure records the evidence
+    # (`after_collect_errors`) above and decides nothing here.
 
     verdict = adjudicate.adjudicate(adjudicate.Measurements(
         pass2=pass2,

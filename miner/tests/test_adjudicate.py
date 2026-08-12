@@ -121,6 +121,88 @@ def test_pass2_regression_is_a_verdict():
     assert v.status == "rejected:regression_broken"
 
 
+def test_pass1_before_collection_error_is_apparatus():
+    # In pass 1 the pytest targets ARE the candidate's own touched test files,
+    # so a before-side collection error means one of THOSE files failed to
+    # import. Under --continue-on-collection-errors its tests silently do not
+    # run, the oracle is absent, and the candidate used to book
+    # `rejected:unchanged` -- our dependency gap recorded as a terminal verdict
+    # about the commit. Apparatus is the honest answer.
+    v = adjudicate.adjudicate(_m(
+        before={"t.py::a": outcomes.FAILURE},
+        after={"t.py::a": outcomes.PASSED},
+        before_collect=["tests/test_a.py", "tests/test_b.py"]))
+    assert v.status == "apparatus"
+    assert "2 of this candidate's own touched test file(s)" in v.reason
+    assert "tests/test_a.py" in v.reason
+
+
+def test_pass1_before_collection_error_outranks_empty_before():
+    # Both arms would book apparatus, but the collection-error arm must win:
+    # its reason names the file(s) that failed to import, which is the
+    # diagnostic _measure's early return exists to surface.
+    v = adjudicate.adjudicate(_m(
+        before={}, after={},
+        before_collect=["tests/test_a.py"]))
+    assert v.status == "apparatus"
+    assert "failed to collect" in v.reason
+    assert "no test outcomes on the before side" not in v.reason
+
+
+def test_pass2_before_collection_errors_are_not_apparatus():
+    # DELIBERATELY NOT pass 2. The full suite in an anchored image carries
+    # endemic collection errors from dependency drift that have nothing to do
+    # with the candidate; a blanket rule there would terminally retire nearly
+    # every candidate. The arm is guarded by `not m.pass2`, so pass 2 must
+    # fall straight through to the measurement path.
+    v = adjudicate.adjudicate(_m(
+        pass2=True, pass1_f2p=["t.py::a"],
+        before={"t.py::a": outcomes.FAILURE},
+        after={"t.py::a": outcomes.PASSED},
+        before_collect=["tests/unrelated.py"]))
+    assert v.status == "validated"
+
+
+def test_a_collection_error_new_to_the_after_side_is_apparatus():
+    # --continue-on-collection-errors means a file that stops importing after
+    # the code patch does not FAIL -- its tests cease to exist. They vanish,
+    # miss the rename rule, land in `broken`, and would book
+    # `rejected:regression_broken` claiming tests "fail" that never ran. The
+    # two sides were not measured comparably, so no verdict is honest.
+    v = adjudicate.adjudicate(_m(
+        before={"t.py::a": outcomes.FAILURE, "t.py::c": outcomes.PASSED},
+        after={"t.py::a": outcomes.PASSED},
+        after_collect=["tests/test_c.py"]))
+    assert v.status == "apparatus"
+    assert "not measured comparably" in v.reason
+    assert "tests/test_c.py" in v.reason
+
+
+def test_a_collection_error_on_both_sides_is_not_apparatus():
+    # A constant of the environment removes the same nodes from both maps, so
+    # the comparison stays symmetric. Booking apparatus on it would retire
+    # every candidate in a suite with one permanently-broken import.
+    v = adjudicate.adjudicate(_m(
+        pass2=True, pass1_f2p=["t.py::a"],
+        before={"t.py::a": outcomes.FAILURE},
+        after={"t.py::a": outcomes.PASSED},
+        before_collect=["tests/test_c.py"],
+        after_collect=["tests/test_c.py"]))
+    assert v.status == "validated"
+
+
+def test_a_collection_error_only_before_does_not_book_apparatus():
+    # Only errors NEW to the after side are the asymmetry that invalidates the
+    # comparison. A before-only collection error means the after side saw MORE
+    # tests, which cannot manufacture a false regression.
+    v = adjudicate.adjudicate(_m(
+        pass2=True, pass1_f2p=["t.py::a"],
+        before={"t.py::a": outcomes.FAILURE},
+        after={"t.py::a": outcomes.PASSED},
+        before_collect=["tests/test_c.py"]))
+    assert v.status == "validated"
+
+
 def test_adjudicate_performs_no_io():
     """Guards the whole point of the extraction. If this module ever imports
     subprocess, quarters or record, the arms stop being testable without
