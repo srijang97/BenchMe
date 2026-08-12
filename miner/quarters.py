@@ -518,5 +518,8 @@ def _wheels_download_cmd(quarter):
                     pins.add(c["core_pin"])
     if pins:
         pkgs = " ".join(f"pydantic-core=={p}" for p in sorted(pins))
-        return f"RUN pip download --dest /opt/miner/wheels {pkgs}"
+        dl = " && ".join(
+            f"pip download --dest /opt/miner/wheels pydantic-core=={p}"
+            for p in sorted(pins))
+        return f"RUN {dl}"
     return ""
