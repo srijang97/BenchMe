@@ -77,13 +77,28 @@ def main():
     # "processed", not "adjudicated": report.py reserves "adjudicated" for
     # validated + rejected, which excludes apparatus by definition and so
     # cannot be this rate's denominator. Same word, two denominators, is how a
-    # reader quotes one rate as the other.
+    # reader quotes one rate as the other. "processed" is every record except
+    # the retryable `error`, which INCLUDES the not_minable family -- those
+    # never entered a container, so they are also excluded from "attempted"
+    # (entered a container) and from "adjudicated" (a verdict about the
+    # commit), but they DID get a durable terminal outcome, so they sit in
+    # this wider denominator.
     processed = [r for r in new.values() if r.get("status") != "error"]
     apparatus = [r for r in processed if r.get("status") == "apparatus"]
     if processed:
         rate = 100.0 * len(apparatus) / len(processed)
         print(f"  {len(apparatus)}/{len(processed)} processed = {rate:.1f}%"
               f"   (tripwire at 10%)")
+
+    print("\nNOT MINABLE (never entered a container)")
+    not_minable = [r for r in new.values()
+                   if r.get("status", "").startswith("not_minable:")]
+    if not not_minable:
+        print("  (none -- every candidate so far entered a container)")
+    for reason, n in collections.Counter(
+            r["status"].split("not_minable:", 1)[1]
+            for r in not_minable).most_common():
+        print(f"  {reason:30} {n}")
 
     print("\nDETERMINISM (pass-1 oracle reproduced in pass 2)")
     seen = False

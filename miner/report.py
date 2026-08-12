@@ -3,13 +3,19 @@ across validated oracles is printed on every run.
 
 Three properties of this renderer are load-bearing and must survive any edit:
 
-1. `apparatus` and `error` NEVER enter a conversion rate. They are our
-   failures, not the commit's. The screener's central lesson was that six of
-   seven eliminations were the apparatus rather than the subject, and that was
-   only visible because the two were counted separately. The headline rate is
-   therefore validated / adjudicated, where ADJUDICATED means "reached a
-   verdict about the commit" -- validated plus rejected, excluding both of our
-   failure classes; the attempted-denominator figure is printed beside it and
+1. `apparatus`, `error` and `not_minable:*` NEVER enter a conversion
+   rate. apparatus and error are our failures, not the commit's;
+   `not_minable:*` means the commit is outside what this method can measure
+   at all (a foreign project grafted into the clone; a commit that straddles
+   an exact dependency pin change) and never entered a container. The
+   screener's central lesson was that six of seven eliminations were the
+   apparatus rather than the subject, and that was only visible because the
+   two were counted separately. The headline rate is therefore validated /
+   adjudicated, where ADJUDICATED means "reached a verdict about the commit"
+   -- validated plus rejected, excluding our failure classes and the
+   not_minable family; ATTEMPTED means "entered a container" (validated +
+   rejected + apparatus + error, never not_minable), and the
+   attempted-denominator figure is printed beside the conversion rate and
    explicitly labelled as NOT the conversion rate, so nobody can quote it as
    one.
 
@@ -153,11 +159,15 @@ def _funnel(out, cands, done):
     apparatus = [d for d in done if d["status"] == "apparatus"]
     errors = [d for d in done if d["status"] == "error"]
     rejected = [d for d in done if d["status"].startswith("rejected:")]
+    not_minable = [d for d in done if d["status"].startswith("not_minable:")]
+    attempted = len(done) - len(not_minable)
     adjudicated = len(validated) + len(rejected)
 
     out += ["## Funnel", ""]
     out.append(f"- Candidates enumerated (stages 0-1): **{len(cands)}**")
-    out.append(f"- Attempted in stage 2: **{len(done)}**")
+    out.append(f"- Attempted in stage 2 (entered a container): **{attempted}**")
+    out.append(f"- Not minable (reported separately -- never entered a "
+               f"container): **{len(not_minable)}**")
     out.append(f"- Validated: **{len(validated)}**")
     out.append(f"- Rejected (a verdict about the commit): **{len(rejected)}**")
     out.append(f"- Apparatus (a verdict about US -- excluded from every rate "
@@ -165,7 +175,8 @@ def _funnel(out, cands, done):
     out.append(f"- Error (miner bug, non-terminal, retried after a fix -- also "
                f"excluded): **{len(errors)}**")
     out.append(f"- Adjudicated -- reached a verdict about the commit "
-               f"(validated + rejected; apparatus and error excluded): "
+               f"(validated + rejected; apparatus, error and not_minable "
+               f"excluded): "
                f"**{adjudicated}**")
     out.append("")
 
@@ -177,11 +188,13 @@ def _funnel(out, cands, done):
     else:
         out.append("**Conversion on adjudicated: undefined** -- nothing "
                    "reached a verdict.")
-    if done:
-        naive = 100 * len(validated) / len(done)
+    if attempted:
+        naive = 100 * len(validated) / attempted
         out.append("")
-        out.append(f"For reference only, {len(validated)}/{len(done)} of "
-                   f"*attempted* is {naive:.1f}%. **That is not a conversion "
+        out.append(f"For reference only, {len(validated)}/{attempted} of "
+                   f"*attempted* (entered a container; the {len(not_minable)} "
+                   f"not_minable records never did) is {naive:.1f}%. "
+                   f"**That is not a conversion "
                    f"rate** and must not be quoted as one: its denominator "
                    f"includes {len(apparatus)} apparatus and {len(errors)} "
                    f"error records, which are candidates we failed to "
@@ -205,6 +218,8 @@ def _verdicts(out, done):
             kind = "accepted"
         elif status.startswith("rejected:"):
             kind = "verdict on the commit"
+        elif status.startswith("not_minable:"):
+            kind = "outside what the method can measure (not attempted)"
         elif status == "apparatus":
             kind = "**our fault** (terminal)"
         else:
@@ -250,17 +265,25 @@ def _composition(out, done):
     # zero over a denominator that cannot contain its numerator. This rate
     # needs apparatus INSIDE the denominator, so it counts every record we
     # processed to a durable outcome, i.e. everything but the retryable
-    # `error`. Different denominator, different word.
+    # `error`. That includes the `not_minable` family: it never entered a
+    # container, but it DID get a durable, terminal outcome, so it belongs in
+    # "processed" even though it is excluded from "attempted" (which means
+    # "entered a container") and from "adjudicated" (which means a verdict
+    # about the commit). Different denominator, different word.
     processed = [r for r in done if r.get("status") != "error"]
     if processed:
+        not_minable = [r for r in processed
+                       if r.get("status", "").startswith("not_minable:")]
         apparatus = [r for r in processed if r.get("status") == "apparatus"]
         rate = 100.0 * len(apparatus) / len(processed)
         out += [f"Apparatus: {len(apparatus)}/{len(processed)} processed "
                 f"candidates ({rate:.1f}%) -- 'processed' is every record "
                 f"except the retryable `error`s, which is a WIDER denominator "
                 f"than the 'adjudicated' one in the funnel above (that one is "
-                f"validated + rejected and excludes apparatus by "
-                f"definition).", ""]
+                f"validated + rejected and excludes apparatus by definition) "
+                f"and WIDER than the 'attempted' one (that one means 'entered "
+                f"a container' and excludes the {len(not_minable)} not_minable "
+                f"records, which never did).", ""]
         # Decision 13. The first 2025Q3 batch ran at 48%: mining on would have
         # spent candidates on our own defects and called the result a yield.
         if rate > APPARATUS_TRIPWIRE:
@@ -301,6 +324,55 @@ def _rejections(out, rejected):
                                  "retired base-negative classifier")
         out.append(f"| `{name}` | {n} | {why} |")
     out.append("")
+
+
+def _not_minable(out, done):
+    """The `not_minable:*` family: commits outside what this method can
+    measure, never entered a container.
+
+    Reported separately from the funnel -- never inside any conversion
+    denominator -- and listed per reason. Emitted unconditionally, including
+    when it is empty: a zero is a measurement, and an absent section looks
+    like an oversight.
+    """
+    not_minable = [d for d in done
+                   if d.get("status", "").startswith("not_minable:")]
+    out += ["## Not minable -- outside what this method can measure", ""]
+    out.append("These never entered a container, so they are reported "
+               "separately and appear in no conversion or attempted "
+               "denominator. `not_minable:*` is a property of the commit, "
+               "not a verdict about it and not our tooling failing.")
+    out.append("")
+    if not not_minable:
+        out.append("None -- every candidate so far entered a container.")
+        out.append("")
+        return
+    out += ["| reason | count | what it means |", "|---|---|---|"]
+    meanings = {
+        "foreign_project": "the commit is a foreign project grafted into the "
+                           "clone (e.g. pydantic-core inside pydantic)",
+        "straddles_dependency_bump": "an exact dependency pin changes across "
+                                     "the commit; before and after need "
+                                     "different environments",
+        "no_pytest_tests": "every touched test was removed by our non-pytest "
+                           "filter -- nothing pytest can run",
+    }
+    for reason, n in sorted(
+            Counter(d["status"].split("not_minable:", 1)[1]
+                    for d in not_minable).items(),
+            key=lambda kv: (-kv[1], kv[0])):
+        why = meanings.get(reason, "no longer produced; a retired family")
+        out.append(f"| `{reason}` | {n} | {why} |")
+    out.append("")
+
+    details = [d for d in not_minable if d.get("reason")]
+    if details:
+        out += ["### Reason detail", "",
+                "| sha | status | reason |", "|---|---|---|"]
+        for d in details:
+            out.append(f"| `{d['sha'][:8]}` | `{d['status']}` | "
+                       f"{(d.get('reason') or '').replace('|', '\\|')} |")
+        out.append("")
 
 
 def _apparatus(out, apparatus, errors):
@@ -457,10 +529,14 @@ def _validated(out, validated):
 
 
 def _quarters(out, cands, done):
-    attempted = Counter(d["quarter"] for d in done)
+    # "Attempted" means "entered a container" here, matching _funnel:
+    # not_minable records never did, so they are excluded from this column.
+    attempted = Counter(d["quarter"] for d in done
+                        if not d["status"].startswith("not_minable:"))
     ok = Counter(d["quarter"] for d in done if d["status"] == "validated")
     out += ["## Candidates by quarter", "",
-            "| quarter | enumerated | attempted | validated |",
+            "| quarter | enumerated | attempted (entered a container) | "
+            "validated |",
             "|---|---|---|---|"]
     for q, n in sorted(Counter(c["quarter"] for c in cands).items(),
                        reverse=True)[:12]:
@@ -475,6 +551,7 @@ def render():
     _verdicts(out, done)
     _composition(out, done)
     _rejections(out, rejected)
+    _not_minable(out, done)
     _apparatus(out, apparatus, errors)
     _drift(out, done)
     _regressions(out, done)
