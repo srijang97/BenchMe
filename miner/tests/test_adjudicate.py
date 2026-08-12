@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import adjudicate  # noqa: E402
 import outcomes  # noqa: E402
+import record  # noqa: E402
 
 A = "tests/test_a.py::test_one"
 B = "tests/test_b.py::test_two"
@@ -37,19 +38,56 @@ def test_no_test_paths_is_a_verdict():
 
 
 def test_deleted_targets_are_a_verdict():
-    # Pins CURRENT behaviour: EMPTY_DELETED books `rejected:unchanged` (the
-    # reason the record already carries for this arm in _measure). The
-    # `rejected:no_runnable_tests` rename is a LATER task, not this one.
+    # Task 4b: EMPTY_DELETED is the one selection-empty cause that is a
+    # verdict about the COMMIT, and it is now spelled
+    # `rejected:no_runnable_tests` rather than the generic `unchanged`, so the
+    # funnel can count it apart from "nothing went fail->pass".
     v = adjudicate.adjudicate(_m(
         targets=adjudicate.TargetSelection([], adjudicate.EMPTY_DELETED,
                                            "tests/test_gone.py")))
-    assert v.status == "rejected:unchanged"
+    assert v.status == "rejected:no_runnable_tests"
+    assert "tests/test_gone.py" in v.reason
+
+
+def test_filtered_targets_are_not_minable_no_pytest_tests():
+    # Task 4b: EMPTY_FILTERED fires only when every touched test path is one
+    # of OUR NON_PYTEST_TEST_DIRS entries -- nothing pytest can ever run, a
+    # property of the commit, not a failure of our tooling. It moves out of
+    # apparatus into the not_minable family, which is terminal in is_done and
+    # never enters a container. The reason carries the target detail.
+    v = adjudicate.adjudicate(_m(
+        targets=adjudicate.TargetSelection(
+            [], adjudicate.EMPTY_FILTERED,
+            "OUR candidates.NON_PYTEST_TEST_DIRS filter dropped "
+            "tests/typechecking/x.py")))
+    assert v.status == "not_minable:no_pytest_tests"
+    assert "tests/typechecking/x.py" in v.reason
 
 
 def test_absent_targets_are_ours():
     v = adjudicate.adjudicate(_m(
         targets=adjudicate.TargetSelection([], adjudicate.EMPTY_ABSENT, "tests/x.py")))
     assert v.status == "apparatus"
+
+
+def test_is_done_is_terminal_for_not_minable_and_not_for_error():
+    # Task 4b: every not_minable:<why> is terminal, like validated/rejected/apparatus.
+    # error stays non-terminal so a miner bug is retried after a fix.
+    assert record.is_done({"status": "not_minable:no_pytest_tests"}) is True
+    assert record.is_done({"status": "not_minable:foreign_project"}) is True
+    assert record.is_done({"status": "not_minable:anything_else"}) is True
+    assert record.is_done({"status": "error"}) is False
+    assert record.is_done({"status": "validated"}) is True
+    assert record.is_done({"status": "apparatus"}) is True
+    assert record.is_done({"status": "rejected:unchanged"}) is True
+
+
+def test_record_docstring_lists_not_minable_as_outside_this_method():
+    # Task 4b: record's status list documents not_minable:<why> as outside
+    # this method, distinct from rejected and apparatus.
+    doc = (record.__doc__ or "") + "\n" + (record.is_done.__doc__ or "")
+    assert "not_minable:<why>" in doc
+    assert "outside this method" in doc
 
 
 def test_empty_before_is_apparatus():

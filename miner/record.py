@@ -3,6 +3,7 @@
 A record is keyed by the candidate commit sha. Statuses:
   validated          fail-to-pass established and reproduced, regressions clean
   rejected:<reason>  a real verdict about the commit
+  not_minable:<why>  the commit is outside what this method can measure (outside this method, distinct from rejected and apparatus)
   apparatus          our fault (OOM, build failure, patch would not apply)
   error              miner bug; traceback recorded, sweep continues
 
@@ -44,7 +45,13 @@ def read_all(path):
 
 
 def is_done(record):
-    """error is NOT terminal -- a miner bug should be retried after a fix."""
+    """error is NOT terminal -- a miner bug should be retried after a fix.
+
+    Terminal statuses: validated, apparatus, rejected:<reason>,
+    not_minable:<why> (outside this method, distinct from rejected and apparatus).
+    Every status starting not_minable: is terminal.
+    """
     status = record.get("status", "")
     return status == "validated" or status == "apparatus" \
-        or status.startswith("rejected:")
+        or status.startswith("rejected:") \
+        or status.startswith("not_minable:")

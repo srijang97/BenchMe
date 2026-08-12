@@ -180,9 +180,14 @@ def adjudicate(m):
     if not m.targets.paths:
         if m.targets.why == EMPTY_NO_TEST_PATHS:
             return Verdict("rejected:unchanged", "no test paths", fields)
-        if m.targets.why in EMPTY_IS_A_VERDICT:
+        if m.targets.why == EMPTY_FILTERED:
             return Verdict(
-                "rejected:unchanged",
+                "not_minable:no_pytest_tests",
+                m.targets.detail,
+                fields)
+        if m.targets.why == EMPTY_DELETED:
+            return Verdict(
+                "rejected:no_runnable_tests",
                 f"no runnable test file among the touched test "
                 f"paths after the test patch: {m.targets.detail}",
                 fields)
