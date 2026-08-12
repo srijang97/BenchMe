@@ -62,6 +62,15 @@ import validate  # noqa: E402
 
 BEFORE, AFTER = "before", "after"
 
+# The fixed, user-writable dir where `_align_core_pin` installs the
+# candidate's own pydantic-core and where `_pytest` prepends to PYTHONPATH.
+# site-packages and /opt/miner are root-owned (the container runs as uid
+# 1000; the Dockerfile chowns only /work), so an in-place downgrade is
+# impossible and the wheel cache lives outside the user's write scope.
+# /work/aligned-core is the isolation-safe spot: user-writable, and each
+# candidate's checkout is a fresh subdir of /work so nothing collides.
+ALIGN_CORE_DIR = "/work/aligned-core"
+
 # The reporter plugin reads its destination from this variable; the runner
 # passes a distinct path per phase so the two runs cannot append to one file.
 #
@@ -239,10 +248,12 @@ def _pytest(container, workdir, targets, log_path, phase, timeout=1800):
     # the honest answer. The path is absolute, so removing it before the cd is
     # safe.
     cmd = (
-        "rm -f {rp}; cd {wd} || exit 3; {env}={rp} PYTHONPATH={rd}:{wd} "
+        "rm -f {rp}; cd {wd} || exit 3; {env}={rp} "
+        "PYTHONPATH={align}:{rd}:{wd} "
         "{argv} -p {plugin} {t} 2>&1"
     ).format(
         wd=wd, rp=shlex.quote(report_path), env=quarters.REPORT_ENV,
+        align=ALIGN_CORE_DIR,
         rd=quarters.REPORTER_DIR, plugin=quarters.PLUGIN_MODULE,
         argv=" ".join([*tierb.PYTEST_ARGV, *PYTEST_EXTRA]),
         t=" ".join(shlex.quote(t) for t in targets))
@@ -804,17 +815,16 @@ def _align_core_pin(container, workdir, cand_pin):
     # quoted string"). The install itself is the check.
     # The container runs as uid 1000 and site-packages is root-owned, so
     # `uv pip install --system` fails with "Permission denied" when the
-    # wheel differs from the installed core. Install into a user-writable
-    # target dir instead and prepend it to PYTHONPATH so the candidate's
-    # `import pydantic_core` resolves the aligned version. The install is
-    # idempotent per run; the target dir is fresh for each candidate workdir.
-    target = f"/work/pydantic-core-{cand_pin}"
+    # wheel differs from the installed core. Install into a fixed,
+    # user-writable target dir instead; `_pytest` prepends this dir to its
+    # own PYTHONPATH so every pytest invocation resolves the aligned
+    # version. The install is idempotent per candidate (same dir reused).
+    target = ALIGN_CORE_DIR
     cmd = (
         "cd {work} || exit 0; "
         "uv pip install --system --target {target} --no-index "
         "--find-links /opt/miner/wheels pydantic-core=={version} "
-        ">/dev/null 2>&1 && "
-        "export PYTHONPATH={target}:$PYTHONPATH"
+        ">/dev/null 2>&1"
     ).format(work=work, target=target, version=cand_pin)
     r = _guard(quarters.exec_in(container, ["sh", "-c", cmd], timeout=300),
                f"align pydantic-core to {cand_pin}")

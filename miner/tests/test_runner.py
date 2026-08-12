@@ -946,13 +946,13 @@ def test_align_core_pin_uses_exec_in_and_offline_install(monkeypatch):
     assert argv[0] == "sh"
     assert argv[1] == "-c"
     cmd = argv[2]
-    # Idempotent offline install of the candidate's exact pin into a
-    # user-writable target dir (site-packages is root-owned under uid 1000),
-    # then prepend it to PYTHONPATH. No version probe: nested quoting under
-    # sh -c / docker exec corrupts the string literal on this host.
-    assert "uv pip install --system --target /work/pydantic-core-2.47.0 --no-index --find-links /opt/miner/wheels" in cmd
+    # Idempotent offline install of the candidate's exact pin into the fixed
+    # user-writable ALIGN_CORE_DIR (site-packages is root-owned under uid
+    # 1000); `_pytest` prepends that dir to its own PYTHONPATH. No version
+    # probe: nested quoting under sh -c / docker exec corrupts the string
+    # literal on this host.
+    assert "uv pip install --system --target /work/aligned-core --no-index --find-links /opt/miner/wheels" in cmd
     assert "pydantic-core==2.47.0" in cmd
-    assert "PYTHONPATH=/work/pydantic-core-2.47.0" in cmd
 
 
 def test_align_core_pin_failure_books_error_not_apparatus(monkeypatch):
