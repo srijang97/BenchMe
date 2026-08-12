@@ -915,3 +915,122 @@ def test_validate_quarter_image_skip_preserves_not_minable(monkeypatch, tmp_path
     assert rec["sha"] == cand_bad["sha"]
     assert rec["anchored"] is None
     assert rec["anchor"] is None
+
+
+
+# --------------------------------------------------------------------------
+# Task 2: wheel caching and pin alignment tests
+# --------------------------------------------------------------------------
+
+def test_align_core_pin_uses_exec_in_and_offline_install(monkeypatch):
+    """The alignment step is a container-facing exec, so it must go through
+    quarters.exec_in -- the single choke point that turns a timeout into
+    ContainerLost (and hence `error`, non-terminal) instead of hanging the
+    one-container-at-a-time slot. It must also target `sh`, not `bash`:
+    python:3.12-slim ships only sh. And the install must be offline
+    (--no-index --find-links /opt/miner/wheels) so the fix is the build-time
+    cache, never a fresh resolve against a network the container does not
+    have (--network none)."""
+    calls = []
+
+    def fake_exec_in(container, argv, timeout=1800):
+        calls.append((container, argv, timeout))
+        return _Proc(0, "", "")
+
+    monkeypatch.setattr(runner.quarters, "exec_in", fake_exec_in)
+    result = runner._align_core_pin("cid123", "/work/x", "2.47.0")
+    assert result is None
+    assert len(calls) == 1
+    cid, argv, timeout = calls[0]
+    assert cid == "cid123"
+    assert argv[0] == "sh"
+    assert argv[1] == "-c"
+    cmd = argv[2]
+    # The version check: only install when the installed core differs.
+    assert "pydantic_core.__version__" in cmd
+    assert "'2.47.0'" in cmd
+    # The offline install of the candidate's exact pin.
+    assert "--no-index" in cmd
+    assert "--find-links /opt/miner/wheels" in cmd
+    assert "pydantic-core==2.47.0" in cmd
+
+
+def test_align_core_pin_failure_books_error_not_apparatus(monkeypatch):
+    """A pin that differs and cannot be installed from the cache is OUR gap
+    (a stale candidates file, a wheel the build did not cache), not a fact
+    about the commit. `error` is non-terminal so the candidate is retried
+    once the cache is rebuilt; `apparatus` would retire it for good."""
+    monkeypatch.setattr(runner.quarters, "exec_in",
+                        lambda *a, **k: _Proc(1, "", "no matching wheel"))
+    fail = runner._align_core_pin("cid123", "/work/x", "2.47.0")
+    assert fail is not None
+    assert fail.status == "error"
+    assert "2.47.0" in fail.reason
+
+
+def test_align_core_pin_noop_without_a_pin(monkeypatch):
+    calls = []
+    monkeypatch.setattr(runner.quarters, "exec_in",
+                        lambda *a, **k: calls.append(a))
+    assert runner._align_core_pin("cid", "/work/x", None) is None
+    assert runner._align_core_pin("cid", "/work/x", "") is None
+    assert calls == []
+
+
+def test_measure_books_error_when_core_pin_cannot_align(monkeypatch):
+    """End to end through _measure: a candidate whose pin cannot be aligned
+    must never reach pytest with the wrong core. The record says `error`
+    (non-terminal), never apparatus and never a verdict about the commit."""
+    monkeypatch.setattr(runner, "_checkout", lambda *a, **k: None)
+    monkeypatch.setattr(runner.quarters, "exec_in",
+                        lambda *a, **k: _Proc(1, "", "no wheel"))
+    cand = {"sha": SHA, "parent": PARENT,
+            "files": ["tests/test_a.py", "pydantic/main.py"],
+            "core_pin": "2.47.0"}
+    out = dict(cand, anchored=True, **{"pass": 1, "before_failed": None})
+    rec = runner._measure("cid", cand, "repo", out, "/work/x", False)
+    assert rec["status"] == "error"
+    assert "2.47.0" in rec["reason"]
+    # The align step ran before pytest, so no measurement happened.
+    assert rec["before_failed"] is None
+
+
+def test_wheels_download_cmd_builds_uv_download(tmp_path, monkeypatch):
+    cands_file = tmp_path / "candidates.jsonl"
+    cand1 = {"sha": "a"*40, "quarter": "2026Q3", "core_pin": "2.47.0"}
+    cand2 = {"sha": "b"*40, "quarter": "2026Q3", "core_pin": "2.48.0"}
+    _write_candidates(cands_file, [cand1, cand2])
+    monkeypatch.setattr(runner.quarters.record, "CANDIDATES", cands_file)
+    cmd = runner.quarters._wheels_download_cmd("2026Q3")
+    assert "pydantic-core==2.47.0" in cmd
+    assert "pydantic-core==2.48.0" in cmd
+    assert "uv pip download" in cmd
+
+
+def test_wheels_download_cmd_skips_not_minable_and_bad_lines(tmp_path,
+                                                             monkeypatch):
+    """The cache is built for candidates the validator will actually measure:
+    not_minable candidates never reach a container, so their pins must not
+    bloat the image. A malformed line must be skipped, never fatal --
+    candidates.jsonl is append-only output, and one corrupted record must not
+    take the quarter's build down with it. A quarter with no pins emits no
+    wheel layer at all."""
+    cands_file = tmp_path / "candidates.jsonl"
+    cands_file.write_text(
+        "this is not json\n"
+        + json.dumps({"sha": "a" * 40, "quarter": "2026Q3",
+                      "core_pin": "2.47.0"}) + "\n"
+        + json.dumps({"sha": "b" * 40, "quarter": "2026Q3",
+                      "core_pin": "2.48.0",
+                      "not_minable": "no_pytest_tests"}) + "\n"
+        + json.dumps({"sha": "c" * 40, "quarter": "2025Q3",
+                      "core_pin": "2.30.0"}) + "\n",
+        encoding="utf-8")
+    monkeypatch.setattr(runner.quarters.record, "CANDIDATES", cands_file)
+    cmd = runner.quarters._wheels_download_cmd("2026Q3")
+    assert "pydantic-core==2.47.0" in cmd
+    assert "pydantic-core==2.48.0" not in cmd  # not_minable: no wheel needed
+    assert "2.30.0" not in cmd                  # other quarter
+    assert "uv pip download" in cmd
+    # A quarter with no pinned candidates must not emit a wheel layer.
+    assert runner.quarters._wheels_download_cmd("2020Q1") == ""

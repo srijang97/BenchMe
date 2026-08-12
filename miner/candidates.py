@@ -292,6 +292,9 @@ def enumerate_candidates(repo):
     # record with status=f"not_minable:{reason}", so it stays in the funnel.
     tomls = _read_pyprojects(repo, [(r["parent"], r["sha"]) for r in out])
     for r in out:
+        c_pins = exact_pins(tomls[f"{r['sha']}:pyproject.toml"])
+        if "pydantic-core" in c_pins:
+            r["core_pin"] = c_pins["pydantic-core"]
         reason = not_minable_reason(
             repo_name,
             tomls[f"{r['parent']}:pyproject.toml"],

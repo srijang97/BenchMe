@@ -38,6 +38,7 @@ Two distinctions are load-bearing here and are never allowed to blur:
                       future branch can forget it.
 """
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -495,6 +496,13 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
         out.update(status=fail.status, reason=fail.reason)
         return out
 
+    cand_pin = cand.get("core_pin")
+    if cand_pin:
+        fail = _align_core_pin(container, workdir, cand_pin)
+        if fail:
+            out.update(status=fail.status, reason=fail.reason)
+            return out
+
     # validate.make_patch raises when a non-empty pathspec yields an empty
     # diff, and outcomes.parse_report raises on a truncated or interleaved
     # reporter line. Both mean OUR capture is wrong, so both are apparatus --
@@ -746,3 +754,61 @@ def validate_quarter(quarter, limit, keep_images, force):
         if not keep_images:
             quarters.remove_image(img.tag)
     return counts
+
+
+def _align_core_pin(container, workdir, cand_pin):
+    """None on success (already aligned), else a Failure("error", reason).
+
+    A candidate's commit pins `pydantic-core==X` in its pyproject.toml, but
+    the quarter image was built from the lockfile at the quarter's LAST
+    commit. A candidate from mid-quarter therefore runs with a NEWER
+    pydantic-core than its own pyproject demands -- the version skew measured
+    as 840 of 6437 failures on 2025Q3. The fix is to install the candidate's
+    own pin, but the container runs --network none, so the install must be
+    served from the wheels the image build pre-downloaded into
+    /opt/miner/wheels (see quarters._wheels_download_cmd).
+
+    The version check runs FIRST, so an already-aligned candidate (the common
+    case for an anchored image) pays one cheap python probe and no install.
+    The check compares against `pydantic_core.__version__`, the version the
+    candidate would actually import -- never against a lockfile line, which
+    is what the container has installed and what the check must test.
+
+    A pin that differs but cannot be installed from the cache is OUR gap (a
+    stale candidates file, a wheel the build did not cache), not a fact about
+    the commit, so it is `error` -- non-terminal in record.is_done, retried
+    once the cache is rebuilt. `apparatus` would retire the candidate for
+    good on the strength of our cache being wrong.
+
+    Runs through quarters.exec_in, not a raw docker exec: exec_in is the
+    single choke point that turns a timeout into ContainerLost (and hence
+    `error`) instead of hanging the one-container-at-a-time slot, and it
+    targets `sh` -- python:3.12-slim ships only sh, no bash. The pin and the
+    workdir are shell-quoted because both arrive as untrusted record fields.
+    """
+    if not cand_pin:
+        return None
+    if not isinstance(cand_pin, str) or not re.fullmatch(r"[0-9][0-9A-Za-z.+\-]*", cand_pin):
+        return Failure("error", f"malformed core_pin {cand_pin!r}")
+    work = shlex.quote(workdir)
+    # cand_pin is validated to a safe charset above, so it is safe unquoted
+    # on the command line; inside the python -c program it is a Python string
+    # literal, quoted as such.
+    pin = repr(cand_pin)
+    cmd = (
+        "cd {work} || exit 0; "
+        "if python -c 'import pydantic_core; "
+        "exit(0 if pydantic_core.__version__ == {pin} else 1)' "
+        "2>/dev/null; then exit 0; fi; "
+        "uv pip install --system --no-index --find-links /opt/miner/wheels "
+        "pydantic-core=={version} >/dev/null 2>&1"
+    ).format(work=work, pin=pin, version=cand_pin)
+    r = _guard(quarters.exec_in(container, ["sh", "-c", cmd], timeout=300),
+               f"align pydantic-core to {cand_pin}")
+    if r.returncode != 0:
+        return Failure(
+            "error",
+            f"candidate pins pydantic-core=={cand_pin} but the container has "
+            f"a different version and the wheel cache could not align it "
+            f"(rc={r.returncode}): {(r.stdout + r.stderr)[:200]}")
+    return None

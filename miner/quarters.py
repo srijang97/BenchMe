@@ -17,6 +17,7 @@ point of anchoring while looking healthy. The build therefore records which
 export ran, and `QuarterImage.anchored` carries the answer out to the caller,
 which MUST stamp it onto every candidate record produced in that image.
 """
+import json
 import re
 import shutil
 import subprocess
@@ -25,6 +26,7 @@ from collections import namedtuple
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "screener"))
+import record  # noqa: E402
 import tierb  # noqa: E402
 
 MEM = "4g"
@@ -118,6 +120,8 @@ RUN mkdir -p /opt/miner \\
       && echo {mode_unfrozen} > {mode_path} )
 RUN uv pip install --system -r /tmp/reqs.txt
 RUN uv pip install --system pytest
+RUN mkdir -p /opt/miner/wheels
+{wheels_download}
 WORKDIR /
 RUN rm -rf /src
 # The first invariant, enforced rather than assumed. If any exported group
@@ -318,7 +322,8 @@ def build_quarter_image(repo, quarter, log_dir):
                               mode_frozen=MODE_FROZEN,
                               mode_unfrozen=MODE_UNFROZEN,
                               mode_path=EXPORT_MODE_PATH,
-                              user=tierb.DEFAULT_CONTAINER_USER),
+                              user=tierb.DEFAULT_CONTAINER_USER,
+                              wheels_download=_wheels_download_cmd(quarter)),
             encoding="utf-8")
         log.append("--- Dockerfile ---\n" + dockerfile.read_text(encoding="utf-8"))
 
@@ -462,3 +467,56 @@ def stop_container(container):
 def remove_image(tag):
     subprocess.run(["docker", "rmi", "-f", tag], capture_output=True,
                    text=True, env=tierb.docker_env())
+
+
+def _wheels_download_cmd(quarter):
+    """The Dockerfile layer that pre-downloads every pydantic-core wheel a
+    quarter's candidates may need, or "" when the quarter pins none.
+
+    The pins come from the candidate records' `core_pin` field -- the exact
+    `pydantic-core==X` pin each commit's root pyproject.toml declares -- so
+    the cache is closed over what `runner._align_core_pin` will ask for.
+
+    Two callers exist and both read this file, so the function is the single
+    point of truth for what lands in the image:
+
+      * build_quarter_image formats it into the Dockerfile. A failed download
+        FAILS THE BUILD: `|| true` is deliberately absent. The whole point of
+        the cache is that the container installs offline
+        (--no-index --find-links /opt/miner/wheels), so a wheel that was not
+        cached is not merely missing convenience -- every candidate needing
+        it would run with the wrong pydantic-core and book apparatus, or be
+        errored and retried. Failing here names the cause once, at build
+        time, the same way the pydantic / pydantic_core guards in the
+        Dockerfile do.
+      * the container runs --network none, so `uv pip download` must reach
+        PyPI from inside the BUILD (builds keep network; the runtime
+        container does not). That is exactly the split this layer encodes.
+
+    A malformed line in candidates.jsonl is skipped, never fatal: the file is
+    append-only output, and one corrupted record must not take the quarter's
+    build down with it. not_minable candidates never reach a container, so
+    their pins must not bloat the image. A quarter whose candidates carry no
+    core_pin gets NO wheel layer, so an anchor predating the pydantic-core
+    pin does not add a no-op RUN to every old image.
+    """
+    pins = set()
+    if record.CANDIDATES.exists():
+        with open(record.CANDIDATES, encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    c = json.loads(line)
+                except ValueError:
+                    # One bad line in an append-only file is a data blemish,
+                    # not a reason to starve the quarter of its wheels.
+                    continue
+                if (c.get("quarter") == quarter
+                        and not c.get("not_minable")
+                        and c.get("core_pin")):
+                    pins.add(c["core_pin"])
+    if pins:
+        pkgs = " ".join(f"pydantic-core=={p}" for p in sorted(pins))
+        return f"RUN uv pip download --dest /opt/miner/wheels {pkgs}"
+    return ""
