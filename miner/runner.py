@@ -802,11 +802,20 @@ def _align_core_pin(container, workdir, cand_pin):
     # python -c under sh -c under docker exec, and the quote layers
     # corrupt the string literal on this host (measured: "Unterminated
     # quoted string"). The install itself is the check.
+    # The container runs as uid 1000 and site-packages is root-owned, so
+    # `uv pip install --system` fails with "Permission denied" when the
+    # wheel differs from the installed core. Install into a user-writable
+    # target dir instead and prepend it to PYTHONPATH so the candidate's
+    # `import pydantic_core` resolves the aligned version. The install is
+    # idempotent per run; the target dir is fresh for each candidate workdir.
+    target = f"/work/pydantic-core-{cand_pin}"
     cmd = (
         "cd {work} || exit 0; "
-        "uv pip install --system --no-index --find-links /opt/miner/wheels "
-        "pydantic-core=={version} >/dev/null 2>&1"
-    ).format(work=work, version=cand_pin)
+        "uv pip install --system --target {target} --no-index "
+        "--find-links /opt/miner/wheels pydantic-core=={version} "
+        ">/dev/null 2>&1 && "
+        "export PYTHONPATH={target}:$PYTHONPATH"
+    ).format(work=work, target=target, version=cand_pin)
     r = _guard(quarters.exec_in(container, ["sh", "-c", cmd], timeout=300),
                f"align pydantic-core to {cand_pin}")
     if r.returncode != 0:
