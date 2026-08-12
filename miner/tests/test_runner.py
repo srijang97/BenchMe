@@ -142,38 +142,62 @@ def test_a_skipped_oracle_node_reaches_the_record_as_apparatus(monkeypatch):
     assert "skipped" in rec["reason"]
 
 
-def test_pass1_before_collection_error_is_apparatus_not_unchanged(monkeypatch):
-    # In PASS 1 the pytest targets are the candidate's OWN touched test files,
-    # so a before-side collection error means one of those files failed to
-    # import. Under --continue-on-collection-errors its tests silently do not
-    # run, the oracle is absent, and the candidate used to book
-    # `rejected:unchanged` -- our dependency gap recorded as a terminal verdict
-    # about the commit.
-    rec = _measure(monkeypatch,
-                   before={A: outcomes.FAILURE},
-                   after={A: outcomes.FAILURE},
-                   pass1_f2p=None, pass2=False,
-                   before_collect=["tests/test_a.py", "tests/test_b.py"])
-    assert rec["status"] == "apparatus"
-    assert "2 of this candidate's own touched test file(s)" in rec["reason"]
-    assert "tests/test_a.py" in rec["reason"]
-    # The diagnostic survives on the record: the check sits after
-    # before_collect_errors is recorded.
-    assert rec["before_collect_errors"] == ["tests/test_a.py",
-                                            "tests/test_b.py"]
-
-
-def test_pass1_collection_error_returns_before_the_after_run(monkeypatch):
-    # A dead candidate must not pay for a second pytest run: the check sits
-    # before the code patch is applied, so no after-side measurement exists.
+def test_pass1_before_collection_error_with_oracle_is_not_apparatus(monkeypatch):
+    # Row 9: an oracle found despite before collection errors still counts.
+    # The aa7705f7 case -- 869 collected, 773 passing, discarded because 2 of
+    # 4 touched files failed to import. The runner must now apply the patch
+    # and run the after side so rows 9-11 can decide, not short-circuit.
     rec = _measure(monkeypatch,
                    before={A: outcomes.FAILURE},
                    after={A: outcomes.PASSED},
                    pass1_f2p=None, pass2=False,
-                   before_collect=["tests/test_a.py"])
+                   before_collect=["tests/other.py"],
+                   messages={A: "AssertionError: boom"})
+    assert rec["status"] == "pass1_ok"
+    assert rec["before_collect_errors"] == ["tests/other.py"]
+    assert rec["after_collect_errors"] == []
+
+
+def test_pass1_cleared_collect_error_is_base_import_blocked(monkeypatch):
+    # Row 10 through runner: the code patch clears the import, so the block is
+    # intrinsic to the commit. Runner must apply the patch and run after side
+    # (not short-circuit), so the cleared error is categorised, not buried.
+    # _measure fabricates before_records from collect errors with generic message;
+    # the runner path still proves it gathered after-side evidence and delegated.
+    # Direct adjudicate tests pin import_block_kind precisely.
+    rec = _measure(monkeypatch,
+                   before={}, after={"t.py::a": outcomes.PASSED},
+                   pass1_f2p=None, pass2=False,
+                   before_collect=["tests/test_f.py"], after_collect=[])
+    assert rec["status"] == "rejected:base_import_blocked"
+    assert rec["before_collect_errors"] == ["tests/test_f.py"]
+    assert rec["after_collect_errors"] == []
+    assert rec["import_block_kind"] in ("missing_symbol", "warning_as_error", "other")
+
+
+def test_pass1_persistent_collect_error_is_apparatus(monkeypatch):
+    # Row 11 through runner: before and after share the same collect error,
+    # nothing cleared, so the cause lives outside the commit.
+    rec = _measure(monkeypatch,
+                   before={}, after={"t.py::a": outcomes.PASSED},
+                   pass1_f2p=None, pass2=False,
+                   before_collect=["tests/test_f.py"], after_collect=["tests/test_f.py"])
     assert rec["status"] == "apparatus"
-    assert "after_collect_errors" not in rec
-    assert "f2p" not in rec
+    assert rec["before_collect_errors"] == ["tests/test_f.py"]
+    assert rec["after_collect_errors"] == ["tests/test_f.py"]
+
+
+def test_pass1_empty_before_true_short_circuit_has_no_after(monkeypatch):
+    # True short-circuit: empty before with NO collect errors. No patch, no after.
+    rec = _measure(monkeypatch,
+                   before={}, after={"t.py::a": outcomes.PASSED},
+                   pass1_f2p=None, pass2=False,
+                   before_collect=[])
+    assert rec["status"] == "apparatus"
+    assert "before side" in rec["reason"]
+    # Even the true short-circuit now carries empty collect fields on every path (Task 2).
+    assert rec["before_collect_errors"] == []
+    assert rec["after_collect_errors"] == []
 
 
 def test_pass1_with_no_collection_errors_is_untouched(monkeypatch):

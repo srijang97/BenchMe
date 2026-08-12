@@ -122,31 +122,37 @@ def test_pass2_regression_is_a_verdict():
 
 
 def test_pass1_before_collection_error_is_apparatus():
-    # In pass 1 the pytest targets ARE the candidate's own touched test files,
-    # so a before-side collection error means one of THOSE files failed to
-    # import. Under --continue-on-collection-errors its tests silently do not
-    # run, the oracle is absent, and the candidate used to book
-    # `rejected:unchanged` -- our dependency gap recorded as a terminal verdict
-    # about the commit. Apparatus is the honest answer.
+    # REMOVED blanket apparatus. Row 9 now beats the blanket: an oracle found
+    # despite collection errors is pass1_ok, not apparatus. The truly empty
+    # before with NO collect errors is the only early apparatus left.
+    # This reworked test pins row 9 through the same shape the old blanket
+    # used to swallow.
+    recs = [outcomes.Record("t.py::a", "call", "failed", "assert 1 == 2")]
     v = adjudicate.adjudicate(_m(
         before={"t.py::a": outcomes.FAILURE},
         after={"t.py::a": outcomes.PASSED},
+        before_records=recs,
         before_collect=["tests/test_a.py", "tests/test_b.py"]))
-    assert v.status == "apparatus"
-    assert "2 of this candidate's own touched test file(s)" in v.reason
-    assert "tests/test_a.py" in v.reason
+    assert v.status == "pass1_ok"
+    assert v.fields["before_collect_errors"] == ["tests/test_a.py", "tests/test_b.py"]
 
 
 def test_pass1_before_collection_error_outranks_empty_before():
-    # Both arms would book apparatus, but the collection-error arm must win:
-    # its reason names the file(s) that failed to import, which is the
-    # diagnostic _measure's early return exists to surface.
+    # Reworked: empty before WITH a collect error is no longer the early
+    # "no test outcomes on the before side" apparatus -- it must go through
+    # rows 10/11. Empty before with NO collect errors remains the true short-circuit.
     v = adjudicate.adjudicate(_m(
         before={}, after={},
-        before_collect=["tests/test_a.py"]))
+        before_collect=[]))
     assert v.status == "apparatus"
-    assert "failed to collect" in v.reason
-    assert "no test outcomes on the before side" not in v.reason
+    assert "before side" in v.reason
+    # With a cleared error and no f2p, row 10 wins over plain unchanged.
+    recs = [outcomes.Record("tests/test_a.py", "collect", "failed", "ImportError: cannot import name 'X'")]
+    v2 = adjudicate.adjudicate(_m(
+        before={}, after={"t.py::a": outcomes.PASSED},
+        before_records=recs,
+        before_collect=["tests/test_a.py"], after_collect=[]))
+    assert v2.status == "rejected:base_import_blocked"
 
 
 def test_pass2_before_collection_errors_are_not_apparatus():
@@ -337,3 +343,71 @@ def test_a_skip_outranks_an_apparent_reproduction_of_the_same_node():
     check = adjudicate.check_pass2_determinism([A], {A: outcomes.SKIPPED}, [A])
     assert check.kind == adjudicate.PASS2_APPARATUS
     assert check.reproduced == []
+
+
+def test_an_oracle_found_despite_collect_errors_still_counts():
+    """Row 9 beats rows 10-12. THE aa7705f7 CASE: it had 869 tests collected
+    and 773 passing, and was discarded because 2 of its 4 touched files failed
+    to import. A collection error matters only when it left us unable to
+    conclude."""
+    recs = [outcomes.Record("t.py::a", "call", "failed", "assert 1 == 2")]
+    v = adjudicate.adjudicate(_m(
+        before={"t.py::a": outcomes.FAILURE}, after={"t.py::a": outcomes.PASSED},
+        before_records=recs, before_collect=["tests/other.py"], after_collect=[]))
+    assert v.status == "pass1_ok"
+    assert v.fields["before_collect_errors"] == ["tests/other.py"]
+
+
+def test_collect_errors_cleared_by_the_patch_are_a_verdict():
+    """Row 10. The fix supplies what the test could not import, so the failure
+    is intrinsic to the commit -- not our environment."""
+    recs = [outcomes.Record("tests/test_f.py", "collect", "failed",
+                            "ImportError: cannot import name 'NewThing'")]
+    v = adjudicate.adjudicate(_m(
+        before={}, after={"t.py::a": outcomes.PASSED}, before_records=recs,
+        before_collect=["tests/test_f.py"], after_collect=[]))
+    assert v.status == "rejected:base_import_blocked"
+    assert v.fields["import_block_kind"] == "missing_symbol"
+
+
+def test_collect_errors_that_persist_are_ours():
+    """Row 11. The patch did not touch it, so the cause lives outside the
+    commit."""
+    v = adjudicate.adjudicate(_m(
+        before={}, after={"t.py::a": outcomes.PASSED},
+        before_collect=["tests/test_f.py"], after_collect=["tests/test_f.py"]))
+    assert v.status == "apparatus"
+
+
+def test_new_collect_errors_after_the_patch_are_ours():
+    v = adjudicate.adjudicate(_m(
+        before={"t.py::a": outcomes.PASSED}, after={"t.py::a": outcomes.PASSED},
+        before_collect=[], after_collect=["tests/test_f.py"]))
+    assert v.status == "apparatus"
+    assert "after" in v.reason
+
+
+def test_no_f2p_and_no_collect_errors_is_still_unchanged():
+    """Row 12. Unchanged must survive as a genuine verdict."""
+    v = adjudicate.adjudicate(_m(
+        before={"t.py::a": outcomes.PASSED}, after={"t.py::a": outcomes.PASSED}))
+    assert v.status == "rejected:unchanged"
+
+
+def test_import_block_kind_recognises_a_missing_symbol():
+    recs = [outcomes.Record("tests/test_f.py", "collect", "failed",
+                            "ImportError: cannot import name 'UnsupportedFieldAttributeWarning'")]
+    assert adjudicate.import_block_kind(recs, ["tests/test_f.py"]) == "missing_symbol"
+
+
+def test_import_block_kind_recognises_a_warning_promoted_to_error():
+    """THE aa7705f7 MECHANISM: filterwarnings = ['error'], the parent still
+    emits the warning at import, and the test patch removed the suppression."""
+    recs = [outcomes.Record("tests/test_p.py", "collect", "failed",
+                            "PydanticExperimentalWarning: This module is experimental")]
+    assert adjudicate.import_block_kind(recs, ["tests/test_p.py"]) == "warning_as_error"
+
+
+def test_import_block_kind_falls_back_to_other():
+    recs = [outcomes.Record("tests/test_f.py", "collect", "failed", "something odd")]
+    assert adjudicate.import_block_kind(recs, ["tests/test_f.py"]) == "other"

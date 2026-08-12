@@ -134,6 +134,31 @@ def labels_for(before_records, f2p):
     return {t: outcomes.label(messages.get(t)) for t in f2p}
 
 
+# Warning classes promoted to errors by a project's filterwarnings config do
+# not follow the Error/Exception naming convention -- pydantic's
+# PydanticExperimentalWarning is the measured case -- so match on the suffix
+# rather than on a name table.
+def import_block_kind(records, cleared):
+    """Why the base state could not import: missing_symbol | warning_as_error | other.
+
+    Sub-label only. The class it describes, rejected:base_import_blocked, is
+    already decided by the time this is called; getting the sub-label wrong
+    misreports a statistic and never changes a verdict.
+    """
+    cleared = set(cleared)
+    for rec in records:
+        if rec.when != "collect" or rec.nodeid not in cleared:
+            continue
+        msg = rec.message or ""
+        head = msg.split(":", 1)[0].rsplit(".", 1)[-1].strip()
+        if head.endswith("Warning"):
+            return "warning_as_error"
+        if head in ("ImportError", "ModuleNotFoundError", "AttributeError",
+                    "NameError"):
+            return "missing_symbol"
+    return "other"
+
+
 def adjudicate(m):
     """Decide a verdict from one candidate's measurements.
 
@@ -142,7 +167,10 @@ def adjudicate(m):
     evidence _measure already recorded (the diff, the blanked/narrowed oracle,
     the labels); _measure merges it into the record verbatim.
     """
-    fields = {}
+    fields = {
+        "before_collect_errors": list(m.before_collect),
+        "after_collect_errors": list(m.after_collect),
+    }
 
     # The selection arms. `_measure` reaches them with a TargetSelection built
     # from the probe; the no-test-paths arm is a fact about the commit, the
@@ -164,36 +192,7 @@ def adjudicate(m):
             f"({m.targets.why}): {m.targets.detail}"[:300],
             fields)
 
-    # PASS 1 ONLY. In pass 1 the pytest targets ARE this candidate's own
-    # touched test files, so a before-side collection error means one of THOSE
-    # files failed to import. Under `--continue-on-collection-errors` its tests
-    # are not run and not reported -- they simply do not exist in `before`. The
-    # oracle can therefore be absent through no fault of the commit, d["f2p"]
-    # comes back empty and the candidate books `rejected:unchanged`: OUR
-    # dependency or environment gap recorded as a terminal verdict about the
-    # commit. Apparatus is the honest answer -- ours, and durable, since the
-    # same image will fail the same import again.
-    #
-    # NOT applied to pass 2, deliberately. Pass 2 runs the FULL suite, where
-    # collection errors from dependency drift in an anchored image are endemic
-    # and have nothing to do with the candidate (measured on 2025Q3); a blanket
-    # rule there would terminally retire nearly every candidate. Pass 2 is not
-    # unguarded in the meantime: `new_collect` below still catches errors NEW
-    # to the after side, and check_pass2_determinism still books apparatus for
-    # any oracle node the full-suite run did not measure, which is the shape a
-    # collection error takes there.
-    if not m.pass2 and m.before_collect:
-        first = m.before_collect[0]
-        return Verdict(
-            "apparatus",
-            f"{len(m.before_collect)} of this candidate's own touched "
-            f"test file(s) failed to collect on the before side, so "
-            f"their tests never ran and the oracle cannot be trusted "
-            f"to be absent for any reason but ours (first: "
-            f"{first})"[:300],
-            fields)
-
-    if not m.before:
+    if not m.before and not m.before_collect:
         return Verdict("apparatus", "no test outcomes on the before side",
                        fields)
 
@@ -214,14 +213,13 @@ def adjudicate(m):
     # Only errors NEW to the after side count. A collection error present on
     # both sides is a constant of the environment: it removes the same nodes
     # from both maps and the diff stays symmetric.
-    new_collect = sorted(set(m.after_collect) - set(m.before_collect))
-    if new_collect:
+    new_after = [p for p in m.after_collect if p not in set(m.before_collect)]
+    if new_after:
         return Verdict(
             "apparatus",
-            f"{len(new_collect)} file(s) failed to collect after the "
-            f"code patch but not before it, so the two sides were not "
-            f"measured comparably and no regression verdict is honest "
-            f"(first: {new_collect[0]})"[:300],
+            f"{len(new_after)} file(s) failed to collect after the "
+            f"code patch but not before, first {new_after[0]!r}; "
+            f"the two sides were not measured comparably"[:300],
             fields)
 
     d = outcomes.diff(m.before, m.after)
@@ -367,6 +365,36 @@ def adjudicate(m):
                 fields)
 
     if not d["f2p"]:
+        # ROW 9 -- an oracle was found, so the collection errors cost us potential
+        # EXTRA oracle tests, not the answer. This ordering is the aa7705f7 fix:
+        # it had 869 tests collected and 773 passing and was thrown away because 2
+        # of its 4 touched files failed to import. The previous phase's own
+        # reviewer warned in the same review that over-correcting into apparatus
+        # is a defect too, because apparatus is terminal.
+        # Rows 10-12 only run when no oracle was found.
+        cleared = [p for p in m.before_collect if p not in set(m.after_collect)]
+        if cleared:
+            # ROW 10 -- the code patch fixed the import, so the block is
+            # intrinsic to the commit. Excluded from the corpus per council
+            # decision 2 (the assertions never ran against unfixed code) but
+            # COUNTED, which is what finally gives missing_api a denominator.
+            fields["import_block_kind"] = import_block_kind(
+                m.before_records, cleared)
+            return Verdict(
+                "rejected:base_import_blocked",
+                f"{len(cleared)} file(s) failed to collect on the before side "
+                f"but not after, so the base state could not import the test "
+                f"module ({fields['import_block_kind']}, first: {cleared[0]!r})"[:300],
+                fields)
+        if m.before_collect:
+            # ROW 11 -- unchanged by the patch, so the cause is outside the commit
+            return Verdict(
+                "apparatus",
+                f"{len(m.before_collect)} file(s) failed to collect on the before "
+                f"side and still fail after the code patch, first {m.before_collect[0]!r}; "
+                f"the cause lives outside the commit"[:300],
+                fields)
+        # ROW 12
         # error_base is spelled out in the reason because it is the one
         # rejection the new contract still makes on failure kind, and it is
         # the number a future audit of decision 2 will need.
