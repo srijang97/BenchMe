@@ -682,6 +682,60 @@ def test_validate_quarter_all_not_minable_short_circuits_before_docker(monkeypat
         assert rec["anchor"] is None
 
 
+def test_validate_quarter_no_pytest_tests_is_stamped_before_docker(monkeypatch, tmp_path):
+    """A candidate whose touched tests are exclusively in NON_PYTEST_TEST_DIRS
+    (stamped no_pytest_tests at stage 1 enumeration) must be recorded pre-Docker:
+    no image build, no container, no validate_one -- and anchored stays None
+    (no image ever ran), never False."""
+    cand = {"sha": "e" * 40, "parent": "f" * 40, "quarter": "2025Q4",
+            "files": ["tests/typechecking/fields.py", "pydantic/main.py"],
+            "test_files": ["tests/typechecking/fields.py"],
+            "not_minable": "no_pytest_tests"}
+    candidates_path = tmp_path / "candidates.jsonl"
+    validated_path = tmp_path / "validated.jsonl"
+    candidates_path.write_text(json.dumps(cand) + "\n", encoding="utf-8")
+    monkeypatch.setattr(runner.record, "CANDIDATES", candidates_path)
+    monkeypatch.setattr(runner.record, "VALIDATED", validated_path)
+    monkeypatch.setattr(runner.record, "LOGS", tmp_path / "logs")
+    monkeypatch.setattr(runner.record, "REPO", tmp_path / "repo")
+    monkeypatch.setattr(runner.quarters, "preflight", lambda: None)
+    monkeypatch.setattr(runner.quarters, "build_quarter_image",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("build_quarter_image must not be called "
+                                           "for a no_pytest_tests candidate")))
+    monkeypatch.setattr(runner.quarters, "start_container",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("start_container must not be called")))
+    monkeypatch.setattr(runner.quarters, "install_reporter",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("install_reporter must not be called")))
+    monkeypatch.setattr(runner.quarters, "stop_container",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("stop_container must not be called")))
+    monkeypatch.setattr(runner.quarters, "remove_image",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("remove_image must not be called")))
+    monkeypatch.setattr(runner, "validate_one",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("validate_one must not be called")))
+
+    counts = runner.validate_quarter("2025Q4", limit=10, keep_images=False, force=False)
+
+    assert counts == {"not_minable:no_pytest_tests": 1}
+    lines = [l for l in validated_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["sha"] == cand["sha"]
+    assert rec["status"] == "not_minable:no_pytest_tests"
+    assert rec["before_failed"] is None
+    assert "no_pytest_tests" in rec["reason"]
+    assert rec["not_minable"] == "no_pytest_tests"
+    assert rec["quarter"] == "2025Q4"
+    assert rec["files"] == cand["files"]
+    assert rec["anchored"] is None
+    assert rec["anchor"] is None
+
+
 def test_validate_quarter_mixed_queue_only_not_minable_before_docker(monkeypatch, tmp_path):
     cand_bad = {"sha": "a" * 40, "parent": "b" * 40, "quarter": "2025Q3",
                 "files": ["pydantic/main.py"], "not_minable": "foreign_project"}

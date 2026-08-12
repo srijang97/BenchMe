@@ -59,8 +59,26 @@ def test_an_unknown_repo_filters_nothing():
 
 
 def test_no_pytest_tests_is_not_minable():
-    """A candidate whose test_files are exclusively in NON_PYTEST_TEST_DIRS is not_minable:no_pytest_tests."""
-    files = ["tests/typechecking/fields.py", "tests/typechecking/secret.py"]
-    assert candidates.not_minable_reason("pydantic", PYDANTIC, PYDANTIC, test_files=files) == "no_pytest_tests"
-    mixed = ["tests/typechecking/fields.py", "tests/test_main.py"]
-    assert candidates.not_minable_reason("pydantic", PYDANTIC, PYDANTIC, test_files=mixed) is None
+    """pydantic/tests/typechecking/ and tests/mypy/ satisfy metrics.is_test_file
+    but pytest collects nothing from them (mypy/pyright fixtures). A candidate
+    whose test files are exclusively in those trees has no fail-to-pass to
+    offer, so it must be stamped no_pytest_tests and never spend a container
+    slot discovering the same thing the filter already knows."""
+    test_files = ["tests/typechecking/fields.py", "tests/typechecking/optional.py"]
+    assert candidates.not_minable_reason(
+        "pydantic", PYDANTIC, PYDANTIC, test_files=test_files) == "no_pytest_tests"
+
+
+def test_no_pytest_tests_requires_every_test_file_to_be_non_pytest():
+    """A single real pytest test among the touched files keeps the candidate
+    minable: the filter must never drop a candidate that has a fail-to-pass to
+    offer, even when most of its tests are static-checker fixtures."""
+    test_files = ["tests/typechecking/fields.py", "tests/test_main.py"]
+    assert candidates.not_minable_reason(
+        "pydantic", PYDANTIC, PYDANTIC, test_files=test_files) is None
+
+
+def test_no_pytest_tests_is_skipped_when_test_files_are_not_provided():
+    """test_files defaults to None for compatibility with the pyproject-only
+    callers; the existing reasons still apply."""
+    assert candidates.not_minable_reason("pydantic", CORE, CORE) == "foreign_project"
