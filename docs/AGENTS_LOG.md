@@ -41,6 +41,93 @@ model-independent.
 
 ## Session register
 
+### claude-code agent 2 — 2026-08-12
+- **Model / surface**: `claude-opus-5` via Claude Code, with subagents on `claude-opus-5` and
+  `claude-sonnet-5`. Council seats on seven models across five labs (see below).
+- **Scope**: Continues the 2026-08-10 entry. Decide how tasks are mined, by multi-model council;
+  build miner stages 0–2 against `pydantic`; run it; fix what running it exposed.
+- **Inputs read**: the 2026-08-10 entry and its artifacts; `screener/metrics.py`, `screener/tierb.py`;
+  `docs/PROJECT_KNOWLEDGE_BASE.md`; published task-mining literature (see `docs/council/01_task_mining_facts.md`
+  for the sourced figures). **Not read**: `dev_workbench_research_docs/`, `demo/`.
+- **Artifacts produced**:
+  - `docs/council/` — two council rounds. Motions, per-model raw responses, chaired syntheses.
+    `scripts/ask-model.sh` is the dispatch harness.
+  - `docs/superpowers/specs/2026-08-11-miner-stages-0-2-design.md` and two plans
+    (`2026-08-11-miner-stages-0-2.md`, `2026-08-11-classifier-redesign.md`)
+  - `miner/` — enumeration, repo-quarter images, two-pass validation, funnel report. 90 unit tests.
+  - `docs/miner/2025Q3-rerun.md` — the known-answer regression against a hand audit
+  - Merged to `main` as PR #2 (42 commits, `5f4c15e`)
+
+**The council.** Seven seats, five labs: Opus 5 (chair), Gemini 3.6 Flash, GPT-5.6 Luna, GPT-5.6 Sol,
+DeepSeek V4 Flash, Kimi K3, GLM 5.2, Qwen3.8 Max — all at their highest available reasoning effort.
+Round 1 ruled on the oracle contract; round 2 revised round 1 on evidence from running the build.
+
+- **Decisions made**:
+  - **Round 1 (oracle contract), unanimous**: mutation survival is a reported diagnostic and never a
+    gate; no LLM judge decides solved/unsolved; an implementation-sensitive oracle measures style
+    rather than capability.
+  - **Round 2, 7–0: failure kind labels a capsule, it does not gate one.** Fail-to-pass against the
+    genuine upstream fix already establishes the failure was caused by the missing fix, so the
+    exception's name adds nothing about validity. The classifier does taxonomy, not validity.
+  - **Gate on execution integrity instead**: pytest's own `<failure>` vs `<error>`. An exception raised
+    in the *call* phase admits whatever its name; only collection/setup errors are disqualifying.
+  - **Three requirements round 1 did not have**, each volunteered by multiple seats: the fail→pass
+    transition must reproduce (pass 2 supplies this free — fresh clone, full-suite selection); one
+    collection error must not zero unrelated tests (`--continue-on-collection-errors`); a node-ID
+    change is a **rename to reconcile, never automatic regression breakage**.
+  - **Read pytest through a plugin, not its terminal output.** `miner/reporter_plugin.py` is installed
+    into the quarter container and hooks `pytest_runtest_logreport`. It yields node ids verbatim, the
+    execution phase, and untruncated messages — and is immune to whatever the terminal reporter does.
+    JUnit XML was measured and rejected for this: it carries no `file` attribute, so a node id has to
+    be guessed back out of a dotted `classname`.
+  - **Alternate implementations are sampled, stratified by failure label** (6–1; the dissent improved
+    the rule — a random sample cannot certify a label it never touches).
+  - **Composition is a mandatory report section, not an optional analysis**, and mining halts if
+    apparatus exceeds 10% of a batch.
+- **Measured result** — same 21 candidates, before and after the redesign: **validated 1 → 7**;
+  `rejected:other` 4 → 0; `regression_broken` 3 → 1. `eb2c860a` had read *"34 previously-passing tests
+  fail after the code patch"* and now records **34 renamed, 0 broken**. **4 of the 9 oracle tests carry
+  labels round 1 would have rejected** — the retired rule's cost, measured rather than argued.
+- **Conclusions overturned**: 4 rows added to the Contested table, three of them my own.
+- **The finding that matters most**: the 2026-08-10 entry recorded that every layer of the screener
+  eliminated good candidates for reasons about the tool rather than the subject. The miner repeated it
+  exactly, and the numbers are worse than they look. Of the first batch's ten rejections, **seven were
+  our defects**. The final whole-branch review then found three more Criticals of the same shape —
+  including a crashed pytest session still writing the "session finished" marker, so a truncated report
+  parsed as complete. And **my fix for one of them over-corrected in the opposite direction**: it
+  discarded a candidate that had collected 869 tests and passed 773. The apparatus rate *rose* 28.6% →
+  47.6% across two re-runs, which is the fix working — four candidates moved out of `rejected:*` once
+  our own path filters stopped being booked as verdicts about commits.
+- **Open questions left**:
+  - **`missing_api = 0` is an artifact, not a measurement.** Both batches read zero, and Kimi and GLM
+    both flagged zero-in-21 as consistent with a true rate near 14%. It is worse than weak: feature work
+    whose test imports a new symbol at *module top level* dies at **collection**, so it never reaches
+    the call-level check at all. Verified on `3a7fe26a`, whose new test imports a class the code patch
+    adds. Feature work has been in the corpus throughout, filed under "our tooling broke".
+  - **A vanished test is being counted as a failed one.** `f7a9b735` books `regression_broken` on
+    *"0 previously-passing tests fail … and 7 vanished"*. Both remaining regression rejections are
+    docs-example tests parametrised on **line ranges inside markdown files the commit edits**. The
+    reconciliation key (`base_id`) lumps every docs file into one bucket, so two genuine deletions
+    poisoned the verdict for seven pure renames.
+  - **The pass-2 collection-error predicate is deliberately broad.** Narrowing it to the candidate's own
+    target files is follow-up; a blanket rule would retire nearly every candidate under dependency drift.
+  - **Two cheap enumeration filters are unbuilt**: 105 of 1,568 candidates are pydantic-**core** commits
+    grafted into the pydantic clone; and 2 of 21 change the pinned `pydantic-core` version, so their
+    before and after states need different environments by construction.
+  - **Repo-quarter profiles survive scrutiny — barely, and by luck.** Only 29% of 2025Q3 candidates have
+    a parent pinned to the image's `pydantic-core`, which looked fatal; cross-referencing against outcomes
+    disproved it (capsules validated at every pin level). The genuine predictor is narrow: commits that
+    *change* the pin. Do not re-derive this from the pin distribution alone.
+  - **`CONVERSION_RATE` still unvalidated.** 7/11 adjudicated reads 63.6%, but 10 of 21 candidates could
+    not be adjudicated at all. Recalibrate only after the filters above land.
+  - **Docs-example tests as oracles.** `aa7705f7`'s oracle is a test that checks a documentation snippet
+    executes. It is a real fail→pass, but a thin oracle, and pydantic has hundreds. Decide deliberately
+    whether they may carry a capsule or belong only in the regression set.
+- **Cost / effort**: one extended session; 7 council responses ×2 rounds; ~1.6 M subagent tokens across
+  14 subagents (7 implementers, 7 reviewers)
+
+---
+
 ### claude-code agent 2 — 2026-08-10
 - **Model / surface**: `claude-opus-5` via Claude Code, with subagents on `claude-opus-5` and `claude-sonnet-5`
 - **Scope**: Select, by measurement rather than judgement, the public Python repo BenchMe builds its
@@ -167,6 +254,10 @@ model-independent.
 | Filename scanning predicts environment feasibility (gates G5, G6) | claude-code agent 2's own spec, 2026-08-10 | **Withdrawn same day** — both scanned the whole repo tree while describing the primary package's build path, so vendored subprojects and peripheral CI tripped them. Both also *predicted* what Tier B *measures* | claude-code agent 2. Tier A now gates only on what Tier B cannot measure |
 | "Installing pydantic compiles no Rust" → corrected to "the lockfile requires a Rust toolchain" | claude-code agent 2's own spec, 2026-08-10 | **Correction retracted** — the real cause was bind-mount shadowing; `_pydantic_core.so` was in the image and no toolchain was ever needed. The correction was worse than the original error because it dressed a misdiagnosis as evidence | claude-code agent 2. Operating rule recorded: **when a candidate fails, the apparatus is the leading hypothesis, not the fallback** |
 | Task yield 10–50 capsules/repo (unsourced) vs 50–200 needed | `research/00`, `research/04`, `research/06` — mutually inconsistent | **Resolved** — 2.2% conversion from raw commit pairs is the published figure; and 30 tasks × k=5 gives a defensible ~12.5 pp MDE | cowork agent 1 handoff §5, §6 |
+| A capsule's base negative must fail for the *right reason*, and only an assertion failure qualifies; `AttributeError`/`ImportError` mean feature work and are rejected | Council round 1, `docs/council/ROUND_01_SYNTHESIS.md` | **Superseded 7–0** — fail-to-pass against the genuine upstream fix already establishes the failure was caused by the missing fix, so the exception name is taxonomy, not validity. Measured cost of the rule: **4 of 9 oracle tests**, and 50% of the first batch's classified f2p tests, rejected on a parser artefact | Council round 2, `docs/council/ROUND_02_SYNTHESIS.md`. Replacement gates on execution integrity (`<failure>` vs `<error>`) and labels everything else |
+| `missing_api` occurs at a rate of zero — the assertion-only rule cost no yield in practice | claude-code agent 2, both 2025Q3 batches | **Artifact, not a measurement** — feature work whose test imports a new symbol at module top level dies at **collection**, so it never reaches the call-level check the rate was computed from. Verified on `3a7fe26a`. Two seats had already flagged zero-in-21 as consistent with ~14% | claude-code agent 2, 2026-08-12. The rate must be recomputed at the collection layer before it means anything |
+| The first batch's 10 apparatus cases were 8 × `tests/typechecking/` fixtures and 2 grafted pydantic-core commits | claude-code agent 2's own hand audit, 2026-08-11 | **Wrong on both counts** — the real causes were `tests/mypy/` fixtures, pydantic-core version skew, commits from a *different project* grafted into the clone, and warning-as-error at import. The audit also mis-called one of four `other:unparsed` rejections as a false rejection when the candidate has a genuine regression | claude-code agent 2, 2026-08-12, `docs/miner/2025Q3-rerun.md`. **The redesign is validated by execution, not by that audit** |
+| A pass-1 collection error means the candidate could not be measured, so book `apparatus` | claude-code agent 2's own fix, 2026-08-12 | **Over-corrected** — `aa7705f7` had 869 tests collected and 773 passing, and was discarded because 2 of its 4 touched files failed to import. The reviewer had warned in the same review that over-correcting into `apparatus` is also a defect, because `apparatus` is terminal | claude-code agent 2, same day. Correct rule: a collection error matters only when it leaves us **unable to conclude** |
 
 ---
 
@@ -188,6 +279,17 @@ model-independent.
 | `docs/superpowers/plans/2026-08-10-repo-screener.md` | claude-code agent 2 | 9-task implementation plan, amended in flight |
 | `screener/` | claude-code agent 2 | Two-tier screener. **`metrics.py` is the harvestable stage-0 rule set** for the miner |
 | `screener/out/REPORT.md` | claude-code agent 2 | Gate ledger + measurements for 18 candidates. Corpus decision: `pydantic` |
+| `screener/FUTURE_WORK.md` | claude-code agent 2 | Parked screener backlog. Top item: `sqlalchemy`, 4,098 candidate pairs, eliminated only on unpinned requirements — possibly a detector gap |
+| `docs/council/01_task_mining_facts.md` | claude-code agent 2 | **Read before any oracle decision.** How SOTA benchmarks mine tasks, with sourced figures: 2.2% honest yield, 77.0% of SWE-bench Verified admit a wrong patch, ≥59.4% have flawed tests |
+| `docs/council/ROUND_01_*.md` + `round01/` | claude-code agent 2 + 7 council seats | Oracle contract. Motion, seven raw responses, chaired synthesis |
+| `docs/council/ROUND_02_*.md` + `round02/` | claude-code agent 2 + 7 council seats | **Supersedes round 1's base-negative rule 7–0.** 14 numbered decisions in the synthesis table |
+| `scripts/ask-model.sh` | claude-code agent 2 | Council dispatch across five labs. Records two live workarounds (a codex-cli config parse failure, a validated-but-nonexistent `CODEX_BIN`) |
+| `docs/superpowers/specs/2026-08-11-miner-stages-0-2-design.md` | claude-code agent 2 | Miner design: quarter images, two-pass validation, the rejected/apparatus/error split |
+| `docs/superpowers/plans/2026-08-11-miner-stages-0-2.md` | claude-code agent 2 | 7-task plan for the miner |
+| `docs/superpowers/plans/2026-08-11-classifier-redesign.md` | claude-code agent 2 | 7-task plan implementing council round 2 |
+| `miner/` | claude-code agent 2 | Stages 0–2. `outcomes.py` is the pure core; `reporter_plugin.py` runs *inside* the container and is never imported by the miner |
+| `miner/out/REPORT.md` | claude-code agent 2 | Funnel, oracle composition by failure label, apparatus tripwire |
+| `docs/miner/2025Q3-rerun.md` | claude-code agent 2 | Known-answer regression: 1 → 7 validated, and an honest account of which predictions failed |
 
 ---
 
@@ -203,3 +305,11 @@ model-independent.
 4. **Single-run results are case studies, not rankings.** Published noise floor is 2.2–6.0 pp
    (arXiv 2602.07150). Anything smaller than your MDE is `indistinguishable`.
 5. **Corrections create a new version.** Never rewrite a task, capsule or result in place.
+6. **A failure of the apparatus must never be recorded as a verdict about the subject.** Learned twice
+   at cost — the screener eliminated 6 of 7 repos on its own defects, and 7 of the miner's first 10
+   rejections were ours. Keep the three statuses rigidly apart: `rejected:*` is a verdict about the
+   subject, `apparatus` is our tooling failing, `error` is a bug and is **non-terminal** so the
+   candidate returns after a fix. Two corollaries, both paid for: an empty result is not a verdict —
+   if nothing parsed, say so rather than concluding "nothing changed"; and **over-correcting is also a
+   defect**, because `apparatus` is terminal and silently shrinks the corpus. When something fails,
+   the apparatus is the leading hypothesis, not the fallback.
