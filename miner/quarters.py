@@ -65,8 +65,36 @@ QUARTER_RE = re.compile(r"^\d{4}Q[1-4]$")
 # the root project.
 TEST_GROUPS = ["testing-extra"]
 _GROUPS = " --all-extras" + "".join(f" --group {g}" for g in TEST_GROUPS)
-EXPORT_FROZEN = tierb._EXPORT + _GROUPS
-EXPORT_FROZEN_MIN = tierb._EXPORT
+
+# `--no-editable` is the pydantic-core guarantee, and it is load-bearing from
+# 2025-11-10 onward. pydantic commit 41f6776e6 ("Make `uv` automatically
+# install `pydantic-core` on `uv run`", #12496) moved pydantic-core from a
+# PyPI pin to a uv WORKSPACE member:
+#
+#     [tool.uv.sources]
+#     pydantic-core = { workspace = true }
+#
+# From that commit on, the export emits `-e ./pydantic-core` -- an EDITABLE
+# install, which is only a pointer back into /src. The Dockerfile then runs
+# `rm -rf /src` (it must; see the first invariant), and the pointer dangles:
+# every candidate in the quarter dies at
+# `pydantic/version.py: from pydantic_core import __version__`, and the miner
+# books the lot as `apparatus`. Measured before this flag: 2025Q3 (anchor
+# predates the migration) ran 0/21 apparatus, while 2025Q4/2026Q1/2026Q2/2026Q3
+# ran 30/40 = 75%, every one of them that same import.
+#
+# `--no-editable` exports workspace members as non-editable, so pydantic-core
+# is BUILT INTO site-packages and survives the deletion. Verified in a clean
+# container against the real 2026Q3 tree: `-e ./pydantic-core` becomes
+# `./pydantic-core`, and after `rm -rf /src`, `import pydantic_core` succeeds
+# at 2.48.0 while `import pydantic` still fails -- so this does not trade the
+# first invariant away to buy the second.
+#
+# It is applied to the UNFROZEN fallback too. Dropping it there would let an
+# unanchored quarter reintroduce the same failure while the record cheerfully
+# reported `anchored=false` rather than the real cause.
+EXPORT_FROZEN = tierb._EXPORT + " --no-editable" + _GROUPS
+EXPORT_FROZEN_MIN = tierb._EXPORT + " --no-editable"
 EXPORT_UNFROZEN = EXPORT_FROZEN.replace("--frozen ", "")
 EXPORT_UNFROZEN_MIN = EXPORT_FROZEN_MIN.replace("--frozen ", "")
 
@@ -104,6 +132,17 @@ RUN if python -c "import pydantic" 2>/dev/null; then \\
       echo "FATAL: pydantic is in site-packages; the export leaked the project"; \\
       exit 1; \\
     fi
+# The mirror invariant, and the reason this one is a BUILD guard rather than a
+# runtime surprise. pydantic-core must be importable WITHOUT /src, because the
+# candidate's own checkout supplies pydantic and nothing else supplies the
+# compiled core. When the export emitted it editable (see `--no-editable`
+# above), this held at build time and failed on every candidate afterwards --
+# 30 apparatus records across four quarters before anyone looked at a log.
+# Fail the build instead, where one message names the cause once.
+RUN python -c "import pydantic_core" >/dev/null 2>&1 || ( \\
+      echo "FATAL: pydantic_core is not importable after /src was removed;" \\
+      echo "the export probably emitted it editable -- see --no-editable"; \\
+      exit 1 )
 # Docker creates a missing `-w` directory as root, which a non-root container
 # cannot write to. Each candidate's checkout lands here, so it must be owned
 # by the user the container actually runs as.
