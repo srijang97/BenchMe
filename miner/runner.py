@@ -658,11 +658,10 @@ def validate_quarter(quarter, limit, keep_images, force):
         rec["status"] = f"not_minable:{reason}"
         rec["before_failed"] = None
         rec["reason"] = f"not_minable:{reason}"
-        # Use same write path as normal candidates but before Docker exists;
-        # anchor fields are None/unanchored at this early stage and will be
-        # overwritten by write() after image build for normal candidates, but
-        # these records never reach that write(). Keep anchored explicit.
-        rec["anchored"] = False
+        # None = no image/container was built, distinct from False (= an
+        # image ran without the frozen anchor). report.py renders None as
+        # "none"/"n/r", not "false", so never-ran is not mistaken for unanchored.
+        rec["anchored"] = None
         rec["anchor"] = None
         record.append(record.VALIDATED, rec)
         counts[rec["status"]] = counts.get(rec["status"], 0) + 1

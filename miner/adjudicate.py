@@ -25,10 +25,11 @@ EMPTY_NOT_RUNNABLE = "not_runnable"    # fixtures/conftest only, nothing to run
 EMPTY_ABSENT = "absent"                # not present, and not because of deletion
 EMPTY_DELETED = "deleted"              # the COMMIT deleted its test files
 
-# Only EMPTY_DELETED is a verdict about the commit. Everything else -- and
-# anything unrecognised, which is the point of testing membership rather than
-# inequality -- is ours and books apparatus.
-EMPTY_IS_A_VERDICT = frozenset({EMPTY_DELETED})
+# Only EMPTY_DELETED and EMPTY_NO_TEST_PATHS are verdicts about the commit
+# (rejected:no_runnable_tests / rejected:unchanged); EMPTY_FILTERED is a
+# not_minable routing, and everything else -- including an unrecognised
+# `why`, which is the point of testing membership rather than inequality --
+# is ours and books apparatus.
 
 PASS2_ERROR = "error"
 PASS2_APPARATUS = "apparatus"

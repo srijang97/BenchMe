@@ -676,6 +676,10 @@ def test_validate_quarter_all_not_minable_short_circuits_before_docker(monkeypat
         assert rec["files"] == cand["files"]
         # preserves candidate fields
         assert rec["not_minable"] == cand["not_minable"]
+        # Semantic: never entered Docker, so anchored is unknown (None), not False.
+        # False means "an image ran without the frozen anchor"; None means no image ran.
+        assert rec["anchored"] is None
+        assert rec["anchor"] is None
 
 
 def test_validate_quarter_mixed_queue_only_not_minable_before_docker(monkeypatch, tmp_path):
@@ -732,5 +736,128 @@ def test_validate_quarter_mixed_queue_only_not_minable_before_docker(monkeypatch
     assert recs[cand_bad["sha"]]["status"] == "not_minable:foreign_project"
     assert recs[cand_bad["sha"]]["before_failed"] is None
     assert "foreign_project" in recs[cand_bad["sha"]]["reason"]
+    assert recs[cand_bad["sha"]]["anchored"] is None
+    assert recs[cand_bad["sha"]]["anchor"] is None
     # good candidate was also recorded (via fake_validate_one)
     assert cand_ok["sha"] in recs
+
+
+# --------------------------------------------------------------------------
+# Post-review queue/force and image-skip contracts (TDD RED -> production fix)
+# --------------------------------------------------------------------------
+
+def _write_candidates(path, cands):
+    path.write_text("\n".join(json.dumps(c) for c in cands) + "\n", encoding="utf-8")
+
+
+def test_validate_quarter_limit_counts_not_minable_before_docker(monkeypatch, tmp_path):
+    """A 1-entry limit where the selected entry is not_minable must not trigger Docker."""
+    cand_bad = {"sha": "a" * 40, "parent": "b" * 40, "quarter": "2025Q3",
+                "files": ["pydantic/main.py"], "not_minable": "foreign_project"}
+    cand_ok = {"sha": "c" * 40, "parent": "d" * 40, "quarter": "2025Q3",
+               "files": ["tests/test_a.py", "pydantic/main.py"]}
+    candidates_path = tmp_path / "candidates.jsonl"
+    validated_path = tmp_path / "validated.jsonl"
+    _write_candidates(candidates_path, [cand_bad, cand_ok])
+    monkeypatch.setattr(runner.record, "CANDIDATES", candidates_path)
+    monkeypatch.setattr(runner.record, "VALIDATED", validated_path)
+    monkeypatch.setattr(runner.record, "LOGS", tmp_path / "logs")
+    monkeypatch.setattr(runner.record, "REPO", tmp_path / "repo")
+    monkeypatch.setattr(runner.quarters, "preflight", lambda: None)
+    monkeypatch.setattr(runner.quarters, "build_quarter_image",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("build must not be called when queue limited to not_minable")))
+    monkeypatch.setattr(runner.quarters, "start_container",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("start_container must not be called")))
+    monkeypatch.setattr(runner.quarters, "install_reporter",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("install_reporter must not be called")))
+    monkeypatch.setattr(runner.quarters, "stop_container",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("stop_container must not be called")))
+    monkeypatch.setattr(runner.quarters, "remove_image",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("remove_image must not be called")))
+    monkeypatch.setattr(runner, "validate_one",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("validate_one must not be called")))
+    counts = runner.validate_quarter("2025Q3", limit=1, keep_images=False, force=False)
+    assert counts == {"not_minable:foreign_project": 1}
+    lines = [l for l in validated_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["sha"] == cand_bad["sha"]
+    assert rec["anchored"] is None
+    assert rec["anchor"] is None
+
+
+def test_validate_quarter_not_minable_retry_is_terminal(monkeypatch, tmp_path):
+    """not_minable is terminal: force=False does not retry; force=True appends."""
+    cand = {"sha": "a" * 40, "parent": "b" * 40, "quarter": "2025Q3",
+            "files": ["pydantic/main.py"], "not_minable": "foreign_project"}
+    candidates_path = tmp_path / "candidates.jsonl"
+    validated_path = tmp_path / "validated.jsonl"
+    _write_candidates(candidates_path, [cand])
+    monkeypatch.setattr(runner.record, "CANDIDATES", candidates_path)
+    monkeypatch.setattr(runner.record, "VALIDATED", validated_path)
+    monkeypatch.setattr(runner.record, "LOGS", tmp_path / "logs")
+    monkeypatch.setattr(runner.record, "REPO", tmp_path / "repo")
+    monkeypatch.setattr(runner.quarters, "preflight", lambda: None)
+    # First run: writes one terminal not_minable record before Docker.
+    monkeypatch.setattr(runner.quarters, "build_quarter_image",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("build must not be called when queue is only not_minable")))
+    monkeypatch.setattr(runner.quarters, "start_container",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("start_container must not be called")))
+    counts1 = runner.validate_quarter("2025Q3", limit=10, keep_images=False, force=False)
+    assert counts1 == {"not_minable:foreign_project": 1}
+    lines1 = [l for l in validated_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines1) == 1
+    assert json.loads(lines1[0])["anchored"] is None
+    # Second run force=False: no Docker, no write (already done, terminal).
+    monkeypatch.setattr(runner.quarters, "build_quarter_image",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("build must not be called on retry with force=False")))
+    monkeypatch.setattr(runner.quarters, "start_container",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("start_container must not be called on retry with force=False")))
+    counts2 = runner.validate_quarter("2025Q3", limit=10, keep_images=False, force=False)
+    assert counts2 == {}
+    lines2 = [l for l in validated_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines2) == 1
+    # Third run force=True: appends one further terminal record (append-only).
+    monkeypatch.setattr(runner.quarters, "build_quarter_image",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("build must not be called when queue is only not_minable")))
+    monkeypatch.setattr(runner.quarters, "start_container",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("start_container must not be called")))
+    counts3 = runner.validate_quarter("2025Q3", limit=10, keep_images=False, force=True)
+    assert counts3 == {"not_minable:foreign_project": 1}
+    lines3 = [l for l in validated_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines3) == 2
+    assert all(json.loads(l)["anchored"] is None for l in lines3)
+    assert all(json.loads(l)["anchor"] is None for l in lines3)
+
+
+def test_validate_quarter_image_skip_preserves_not_minable(monkeypatch, tmp_path):
+    """Mixed queue: not_minable recorded before Docker; skip image returns counts unchanged and never starts a container."""
+    cand_bad = {"sha": "a" * 40, "parent": "b" * 40, "quarter": "2025Q3",
+                "files": ["pydantic/main.py"], "not_minable": "foreign_project"}
+    cand_ok = {"sha": "c" * 40, "parent": "d" * 40, "quarter": "2025Q3",
+               "files": ["tests/test_a.py", "pydantic/main.py"]}
+    candidates_path = tmp_path / "candidates.jsonl"
+    validated_path = tmp_path / "validated.jsonl"
+    _write_candidates(candidates_path, [cand_bad, cand_ok])
+    monkeypatch.setattr(runner.record, "CANDIDATES", candidates_path)
+    monkeypatch.setattr(runner.record, "VALIDATED", validated_path)
+    monkeypatch.setattr(runner.record, "LOGS", tmp_path / "logs")
+    monkeypatch.setattr(runner.record, "REPO", tmp_path / "repo")
+    monkeypatch.setattr(runner.quarters, "preflight", lambda: None)
+    Img = namedtuple("Img", "tag anchored anchor skip reason")
+    skip_img = Img(tag=None, anchored=None, anchor=None, skip=True, reason="nothing to mine")
+    monkeypatch.setattr(runner.quarters, "build_quarter_image", lambda *a, **k: skip_img)
+    monkeypatch.setattr(runner.quarters, "start_container",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("start_container must not be called when image is skipped")))
+    monkeypatch.setattr(runner.quarters, "install_reporter",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("install_reporter must not be called when image is skipped")))
+    monkeypatch.setattr(runner, "validate_one",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("validate_one must not be called when image is skipped")))
+    counts = runner.validate_quarter("2025Q3", limit=10, keep_images=False, force=False)
+    assert counts == {"not_minable:foreign_project": 1}
+    lines = [l for l in validated_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["sha"] == cand_bad["sha"]
+    assert rec["anchored"] is None
+    assert rec["anchor"] is None
