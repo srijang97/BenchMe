@@ -747,24 +747,45 @@ def validate_quarter(quarter, limit, keep_images, force):
                             reason=traceback.format_exc()[-1500:])
 
         survivors = []
-        try:
-            for cand in queue:
+        remaining = list(queue)
+        while remaining:
+            cand = remaining.pop(0)
+            try:
                 rec = attempt(cand, pass2=False)
                 if rec["status"] == "pass1_ok":
                     survivors.append((cand, rec["f2p"]))
                 else:
                     write(rec)
-            for cand, pass1_f2p in survivors:
+            except ContainerLost as exc:
+                is_timeout = "timed out" in str(exc).lower()
+                st = "apparatus" if is_timeout else "error"
+                write(dict(cand, status=st, before_failed=None,
+                           reason=f"container lost ({st}): {exc}"))
+                print(f"  restarting container for {quarter} after {cand['sha'][:8]} lost container: {exc}")
+                quarters.stop_container(cid)
+                cid = quarters.start_container(img.tag, f"miner-{quarter.lower()}")
+                if not cid:
+                    print(f"  could not restart container for {quarter}")
+                    break
+                quarters.install_reporter(cid)
+
+        pass2_queue = list(survivors)
+        while pass2_queue:
+            cand, pass1_f2p = pass2_queue.pop(0)
+            try:
                 write(attempt(cand, pass2=True, pass1_f2p=pass1_f2p))
-        except ContainerLost as exc:
-            # `error`, not `apparatus`. Both are our fault, but apparatus is
-            # TERMINAL in record.is_done, so a container timeout would retire
-            # a candidate that may be perfectly valid and never look at it
-            # again. `error` was made non-terminal in Task 1 for exactly this:
-            # infrastructure loss is retried once the infrastructure is fixed.
-            write(dict(cand, status="error", before_failed=None,
-                       reason=f"container lost: {exc}"))
-            print(f"  stopping {quarter}: {exc}")
+            except ContainerLost as exc:
+                is_timeout = "timed out" in str(exc).lower()
+                st = "apparatus" if is_timeout else "error"
+                write(dict(cand, status=st, before_failed=None,
+                           reason=f"container lost in pass 2 ({st}): {exc}"))
+                print(f"  restarting container for {quarter} after pass 2 {cand['sha'][:8]} lost container: {exc}")
+                quarters.stop_container(cid)
+                cid = quarters.start_container(img.tag, f"miner-{quarter.lower()}")
+                if not cid:
+                    print(f"  could not restart container for {quarter}")
+                    break
+                quarters.install_reporter(cid)
     finally:
         quarters.stop_container(cid)
         if not keep_images:
