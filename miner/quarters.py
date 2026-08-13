@@ -26,6 +26,7 @@ from collections import namedtuple
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "screener"))
+import candidates  # noqa: E402
 import record  # noqa: E402
 import tierb  # noqa: E402
 
