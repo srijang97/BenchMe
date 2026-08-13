@@ -583,6 +583,8 @@ def _measure(container, cand, repo, out, workdir, pass2, pass1_f2p=None):
     out["before_failed"] = sum(1 for v in before.values()
                                if v == outcomes.FAILURE)
     out["before_collect_errors"] = [r.nodeid for r in before_collect]
+    if before_collect:
+        out["first_collect_error"] = outcomes.extract_first_collect_error(before_collect)
 
     # Narrowed guard (Task 2 amendment). Only an empty `before` with NO
     # before-side collection errors may short-circuit before the after run.
@@ -726,6 +728,7 @@ def validate_quarter(quarter, limit, keep_images, force):
             # record by hand. See the module docstring.
             rec["anchored"] = img.anchored
             rec["anchor"] = img.anchor
+            rec["profile"] = getattr(img, "profile", None)
             record.append(record.VALIDATED, rec)
             counts[rec["status"]] = counts.get(rec["status"], 0) + 1
             print(f"  {rec['sha'][:8]} {rec['status']} {rec.get('reason') or ''}")

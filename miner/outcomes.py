@@ -349,3 +349,11 @@ def diff(before, after):
             "renamed": sorted(renamed), "vanished": sorted(vanished),
             "error_base": sorted(error_base),
             "skipped_after": sorted(skipped_after)}
+
+
+def extract_first_collect_error(collect_records):
+    if not collect_records:
+        return None
+    rec = collect_records[0]
+    raw_msg = rec.message.strip().splitlines()[0] if rec.message else "collection error"
+    return f"{rec.nodeid}: {raw_msg}"

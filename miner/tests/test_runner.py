@@ -60,7 +60,7 @@ def _measure(monkeypatch, before, after, pass1_f2p=None, pass2=True,
         collect = before_collect if phase == runner.BEFORE else after_collect
         records = [outcomes.Record(n, "call", "failed", messages.get(n))
                    for n, s in status.items() if s == outcomes.FAILURE]
-        errors = [outcomes.Record(n, "collect", "failed",
+        errors = [n if isinstance(n, outcomes.Record) else outcomes.Record(n, "collect", "failed",
                                   collect_messages.get(n, "ImportError"))
                   for n in collect]
         # Mirrors runner._pytest's merged return contract: records carries
@@ -1122,3 +1122,68 @@ def test_guard_raises_container_lost_on_no_such_container():
     with pytest.raises(runner.ContainerLost) as exc_info:
         runner._guard(Proc(), "test_op")
     assert "container lost during test_op" in str(exc_info.value)
+
+
+def test_measure_records_first_collect_error(monkeypatch):
+    rec_err = outcomes.Record(
+        nodeid="tests/test_fail.py",
+        when="collect",
+        outcome="failed",
+        message="ModuleNotFoundError: No module named 'bar'\nExtra info",
+    )
+    res = _measure(
+        monkeypatch,
+        before={},
+        after={},
+        before_collect=[rec_err],
+        collect_messages={"tests/test_fail.py": "ModuleNotFoundError: No module named 'bar'\nExtra info"},
+    )
+    assert res.get("first_collect_error") == "tests/test_fail.py: ModuleNotFoundError: No module named 'bar'"
+
+
+def test_validate_quarter_stamps_profile_in_written_records(monkeypatch, tmp_path):
+    cand = {
+        "sha": "a" * 40,
+        "parent": "b" * 40,
+        "quarter": "2025Q3",
+        "files": ["tests/test_a.py", "pydantic/main.py"],
+    }
+    candidates_path = tmp_path / "candidates.jsonl"
+    validated_path = tmp_path / "validated.jsonl"
+    _write_candidates(candidates_path, [cand])
+    monkeypatch.setattr(runner.record, "CANDIDATES", candidates_path)
+    monkeypatch.setattr(runner.record, "VALIDATED", validated_path)
+    monkeypatch.setattr(runner.record, "LOGS", tmp_path / "logs")
+    monkeypatch.setattr(runner.record, "REPO", tmp_path / "repo")
+    monkeypatch.setattr(runner.quarters, "preflight", lambda: None)
+
+    Img = namedtuple("Img", "tag anchored anchor profile skip reason")
+    fake_img = Img(
+        tag="benchme:2025q3",
+        anchored=True,
+        anchor="abc",
+        profile="uv_locked",
+        skip=False,
+        reason="",
+    )
+    monkeypatch.setattr(runner.quarters, "build_quarter_image", lambda *a, **k: fake_img)
+    monkeypatch.setattr(runner.quarters, "start_container", lambda *a, **k: "cid123")
+    monkeypatch.setattr(runner.quarters, "install_reporter", lambda *a, **k: None)
+    monkeypatch.setattr(runner.quarters, "stop_container", lambda *a, **k: None)
+    monkeypatch.setattr(runner.quarters, "remove_image", lambda *a, **k: None)
+
+    def fake_validate_one(cid, cand, repo, anchored, pass2=False, pass1_f2p=None):
+        out = dict(cand)
+        out["status"] = "rejected:unchanged"
+        out["before_failed"] = 0
+        out["reason"] = "no test went fail->pass"
+        return out
+
+    monkeypatch.setattr(runner, "validate_one", fake_validate_one)
+
+    counts = runner.validate_quarter("2025Q3", limit=10, keep_images=False, force=False)
+    assert counts == {"rejected:unchanged": 1}
+    lines = [l for l in validated_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["profile"] == "uv_locked"

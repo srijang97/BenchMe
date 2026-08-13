@@ -529,3 +529,26 @@ def test_diff_routes_a_newly_skipped_test_to_its_own_bucket():
     assert d["skipped_after"] == ["t.py::a"]
     assert d["broken"] == []
     assert d["p2p"] == []
+
+
+def test_extract_first_collect_error():
+    assert outcomes.extract_first_collect_error([]) is None
+
+    rec_with_msg = outcomes.Record(
+        nodeid="tests/test_a.py",
+        when="collect",
+        outcome="failed",
+        message="ImportError: cannot import name 'foo'\n  Traceback details...",
+    )
+    assert (
+        outcomes.extract_first_collect_error([rec_with_msg])
+        == "tests/test_a.py: ImportError: cannot import name 'foo'"
+    )
+
+    rec_no_msg = outcomes.Record(
+        nodeid="tests/test_b.py", when="collect", outcome="failed", message=""
+    )
+    assert (
+        outcomes.extract_first_collect_error([rec_no_msg])
+        == "tests/test_b.py: collection error"
+    )
