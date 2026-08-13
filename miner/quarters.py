@@ -132,10 +132,10 @@ PDM_PROFILE = EnvironmentProfile(
     name="pdm_locked",
     lockfile="pdm.lock",
     tool_install="RUN pip install --no-cache-dir uv pdm",
-    export_frozen="pdm export -g testing -g testing-extra --no-self",
-    export_frozen_min="pdm export --no-self",
-    export_unfrozen="pdm export -g testing -g testing-extra --no-self",
-    export_unfrozen_min="pdm export --no-self",
+    export_frozen="pdm export -g testing -g testing-extra --no-self || pdm export --pyproject -G testing -G testing-extra",
+    export_frozen_min="pdm export --no-self || pdm export --pyproject",
+    export_unfrozen="pdm export -g testing -g testing-extra --no-self || pdm export --pyproject -G testing -G testing-extra",
+    export_unfrozen_min="pdm export --no-self || pdm export --pyproject",
     profile_probes=("dirty_equals", "pytest_examples"),
 )
 
