@@ -54,7 +54,7 @@ def _measure(monkeypatch, before, after, pass1_f2p=None, pass2=True,
                         lambda *a, **k: (["tests"], None))
 
     def fake_pytest(container, workdir, targets, log_path, phase,
-                    timeout=1800):
+                    timeout=300):
         status = before if phase == runner.BEFORE else after
         collect = before_collect if phase == runner.BEFORE else after_collect
         records = [outcomes.Record(n, "call", "failed", messages.get(n))
@@ -540,7 +540,7 @@ def test_runnable_targets_still_reports_a_failed_probe(monkeypatch):
 # --------------------------------------------------------------------------
 
 def _exec_for_pytest(monkeypatch, report_text, pytest_rc=1):
-    def exec_in(container, argv, timeout=1800):
+    def exec_in(container, argv, timeout=300):
         if argv[0] == "cat":
             return _Proc(0, report_text, "")
         return _Proc(pytest_rc, "pytest output", "")
@@ -933,7 +933,7 @@ def test_align_core_pin_uses_exec_in_and_offline_install(monkeypatch):
     have (--network none)."""
     calls = []
 
-    def fake_exec_in(container, argv, timeout=1800):
+    def fake_exec_in(container, argv, timeout=300):
         calls.append((container, argv, timeout))
         return _Proc(0, "", "")
 

@@ -119,7 +119,7 @@ RUN mkdir -p /opt/miner \\
  || ( ( {fallback} > /tmp/reqs.txt || {fallback_min} > /tmp/reqs.txt ) \\
       && echo {mode_unfrozen} > {mode_path} )
 RUN uv pip install --system -r /tmp/reqs.txt
-RUN uv pip install --system pytest
+RUN uv pip install --system pytest hypothesis
 RUN mkdir -p /opt/miner/wheels
 {wheels_download}
 WORKDIR /
@@ -431,7 +431,7 @@ def start_container(image, name):
     return proc.stdout.strip() if proc.returncode == 0 else None
 
 
-def exec_in(container, argv, timeout=1800):
+def exec_in(container, argv, timeout=300):
     """Run argv in the container. ALWAYS returns a CompletedProcess.
 
     On timeout the return code is `tierb.TIMEOUT_RETURNCODE` (-9), the

@@ -198,7 +198,7 @@ def _apply(container, workdir, patch_text, label):
     return None
 
 
-def _pytest(container, workdir, targets, log_path, phase, timeout=1800):
+def _pytest(container, workdir, targets, log_path, phase, timeout=300):
     """Run pytest on `targets`; return
     (status_map, records, collect_errors, output).
 
