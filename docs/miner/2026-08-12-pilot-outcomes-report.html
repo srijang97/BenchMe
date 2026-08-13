@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BenchMe Miner Roadmap Steps 1-3: Pilot Outcomes Report</title>
+    <title>BenchMe Miner Roadmap Steps 1-3: Pilot & Post-Migration Corpus Outcomes Report</title>
     <style>
         :root {
             --primary: #2563eb;
@@ -182,11 +182,11 @@
 <body>
     <div class="container">
         <header>
-            <h1>BenchMe Miner Roadmap: Steps 1?3 Pilot Outcomes Report</h1>
+            <h1>BenchMe Miner Roadmap: Steps 1?3 Pilot & Post-Migration Outcomes</h1>
             <div class="meta">
-                <span><strong>Date:</strong> August 12, 2026</span>
+                <span><strong>Date:</strong> August 13, 2026</span>
                 <span><strong>Branch:</strong> <code>feat/miner-adjudication</code></span>
-                <span><strong>Target Corpus:</strong> Pydantic v2-era</span>
+                <span><strong>Target Corpus:</strong> Pydantic v2-era (2025Q3?2026Q3)</span>
                 <span><strong>Unit Suite:</strong> 155 / 155 Passed (100%)</span>
             </div>
         </header>
@@ -194,27 +194,27 @@
         <section id="executive-summary">
             <h2>Executive Summary</h2>
             <p>
-                This report presents the outcomes of implementing <strong>Steps 1 through 3</strong> of the BenchMe Miner Roadmap to resolve container build failures, dependency version skews, and inefficient docker runs across the Pydantic v2 corpus.
+                This report presents the complete outcomes of implementing <strong>Steps 1 through 3</strong> of the BenchMe Miner Roadmap to resolve container build failures, dependency version skews, infinite execution loops, and inefficient docker runs across the Pydantic v2 corpus.
             </p>
             <div class="callout callout-success">
-                <strong>Key Achievement:</strong> In the 4-quarter validation pilot (2025Q4?2026Q3), apparatus failure rate dropped from <strong>75.0% down to 12.1%</strong> (and <strong>0.0% in 2025Q4</strong>). Validated reproducible capsules increased from <strong>0 to 12</strong> across the pilot quarters.
+                <strong>Key Achievement:</strong> Across all 93 candidates in the post-migration quarters (2025Q4?2026Q3), our fixes produced <strong>53 validated reproducible capsules</strong> (up from 0 baseline), with an overall <strong>conversion rate of 74.6%</strong> and an apparatus failure rate reduced from <strong>75.0% down to 11.2%</strong> (and <strong>3.2% in 2025Q4</strong>).
             </div>
 
             <div class="grid">
                 <div class="card">
-                    <div class="label">Apparatus Rate</div>
-                    <div class="metric metric-success">12.1%</div>
-                    <div class="subtext">Down from 75.0% baseline</div>
-                </div>
-                <div class="card">
-                    <div class="label">Pilot Validated Capsules</div>
-                    <div class="metric metric-info">12</div>
-                    <div class="subtext">Across 40 pilot candidates</div>
+                    <div class="label">Validated Capsules</div>
+                    <div class="metric metric-success">53</div>
+                    <div class="subtext">Out of 71 adjudicated (2025Q4-2026Q3)</div>
                 </div>
                 <div class="card">
                     <div class="label">Conversion Rate</div>
-                    <div class="metric metric-success">63.2%</div>
+                    <div class="metric metric-success">74.6%</div>
                     <div class="subtext">Validated / Adjudicated</div>
+                </div>
+                <div class="card">
+                    <div class="label">Apparatus Rate</div>
+                    <div class="metric metric-success">11.2%</div>
+                    <div class="subtext">Down from 75.0% baseline</div>
                 </div>
                 <div class="card">
                     <div class="label">Unit Test Pass Rate</div>
@@ -243,7 +243,7 @@
         </section>
 
         <section id="step-2">
-            <h2>Step 2: <code>pydantic-core</code> Wheel Caching & In-Container Skew Alignment</h2>
+            <h2>Step 2: <code>pydantic-core</code> Wheel Caching, In-Container Alignment & 300s Timeout Guard</h2>
             <p>
                 Starting with Pydantic commit <code>41f6776e6</code> (2025-11-10), <code>pydantic-core</code> became a <code>uv</code> workspace path dependency. In Docker container builds, <code>RUN rm -rf /src</code> deleted the source tree after installation, leaving <code>pydantic_core</code> unimportable and causing a 75% apparatus failure rate across 2025Q4?2026Q3.
             </p>
@@ -251,11 +251,12 @@
                 Furthermore, even after fixing the build with <code>uv export --no-editable</code>, Pydantic's internal version check (<code>version.py::_ensure_pydantic_core_version</code>) raised a hard <code>SystemError</code> whenever the installed <code>pydantic-core</code> version differed from the candidate's exact <code>pyproject.toml</code> pin.
             </p>
             <p>
-                <strong>Implementation:</strong>
+                <strong>Implementation & Safeguards:</strong>
             </p>
             <ol>
                 <li><strong>Build-Time Wheel Caching (<code>miner/quarters.py</code>):</strong> During quarter image construction, all unique <code>pydantic-core</code> exact pins declared by candidates in that quarter are pre-downloaded into <code>/opt/miner/wheels</code> using <code>pip download</code>.</li>
                 <li><strong>In-Container Version Alignment (<code>miner/runner.py</code>):</strong> Before running <code>pytest</code> on a candidate, <code>_align_core_pin</code> installs the candidate's exact <code>core_pin</code> from <code>/opt/miner/wheels</code> into a user-writable target directory (<code>/work/aligned-core</code>) and prepends it to <code>PYTHONPATH</code> for all <code>pytest</code> executions.</li>
+                <li><strong>300s Execution Timeout & Container Recovery Loop:</strong> Reduced the default <code>pytest</code> timeout from 1800s to 300s. If a candidate contains an infinite execution loop (such as <code>c333d775</code>'s core schema recursion bug), <code>ContainerLost</code> is raised, <code>apparatus: pytest timed out</code> is recorded, and the runner automatically restarts a fresh container to continue processing subsequent candidates without halting the quarter.</li>
             </ol>
             <pre><code># quarters.py Dockerfile layer:
 RUN pip download --dest /opt/miner/wheels pydantic-core==2.41.1 && pip download --dest /opt/miner/wheels pydantic-core==2.41.5 ...
@@ -266,9 +267,9 @@ PYTHONPATH=/work/aligned-core:$PYTHONPATH pytest ...</code></pre>
         </section>
 
         <section id="step-3">
-            <h2>Step 3: 4-Quarter Validation Pilot Outcomes</h2>
+            <h2>Step 3: Post-Migration Quarter Outcomes (2025Q3?2026Q3)</h2>
             <p>
-                We executed a 10-candidate validation sample across the four post-migration quarters (2025Q4, 2026Q1, 2026Q2, 2026Q3).
+                Detailed breakdown of candidate outcomes across the post-migration corpus:
             </p>
 
             <table>
@@ -276,11 +277,12 @@ PYTHONPATH=/work/aligned-core:$PYTHONPATH pytest ...</code></pre>
                     <tr>
                         <th>Quarter</th>
                         <th>Anchor Date</th>
-                        <th>Evaluated</th>
+                        <th>Total Candidates</th>
                         <th>Validated</th>
                         <th>Rejected</th>
                         <th>Not Minable</th>
                         <th>Apparatus</th>
+                        <th>Conversion Rate</th>
                         <th>Apparatus Rate</th>
                     </tr>
                 </thead>
@@ -293,65 +295,66 @@ PYTHONPATH=/work/aligned-core:$PYTHONPATH pytest ...</code></pre>
                         <td>5</td>
                         <td>7</td>
                         <td>0</td>
+                        <td><span class="badge badge-success">64.3%</span></td>
                         <td><span class="badge badge-success">0.0%</span></td>
                     </tr>
                     <tr>
                         <td><strong>2025Q4</strong></td>
                         <td>2025-12-29</td>
-                        <td>10</td>
-                        <td>6</td>
+                        <td>36</td>
+                        <td>22</td>
+                        <td>8</td>
+                        <td>5</td>
                         <td>1</td>
-                        <td>3</td>
-                        <td>0</td>
-                        <td><span class="badge badge-success">0.0%</span></td>
+                        <td><span class="badge badge-success">73.3%</span></td>
+                        <td><span class="badge badge-success">3.2%</span></td>
                     </tr>
                     <tr>
                         <td><strong>2026Q1</strong></td>
                         <td>2026-04-01</td>
-                        <td>10</td>
-                        <td>3</td>
+                        <td>19</td>
+                        <td>8</td>
+                        <td>5</td>
                         <td>2</td>
-                        <td>2</td>
-                        <td>3</td>
-                        <td><span class="badge badge-warning">37.5%</span></td>
+                        <td>4</td>
+                        <td><span class="badge badge-info">61.5%</span></td>
+                        <td><span class="badge badge-warning">23.5%</span></td>
                     </tr>
                     <tr>
                         <td><strong>2026Q2</strong></td>
                         <td>2026-07-01</td>
-                        <td>10</td>
-                        <td>3</td>
+                        <td>16</td>
+                        <td>8</td>
                         <td>2</td>
                         <td>4</td>
-                        <td>1</td>
-                        <td><span class="badge badge-success">16.7%</span></td>
+                        <td>2</td>
+                        <td><span class="badge badge-success">80.0%</span></td>
+                        <td><span class="badge badge-warning">16.7%</span></td>
                     </tr>
                     <tr>
                         <td><strong>2026Q3</strong></td>
                         <td>2026-08-09</td>
-                        <td>10</td>
-                        <td>0</td>
+                        <td>22</td>
+                        <td>15</td>
+                        <td>3</td>
                         <td>2</td>
-                        <td>1</td>
-                        <td>0</td>
-                        <td><span class="badge badge-success">0.0%</span></td>
+                        <td>2</td>
+                        <td><span class="badge badge-success">83.3%</span></td>
+                        <td><span class="badge badge-success">10.0%</span></td>
                     </tr>
                     <tr style="font-weight: bold; background-color: #f1f5f9;">
-                        <td>Pilot Total (Q4?Q3)</td>
+                        <td>Post-Migration Total (Q4?Q3)</td>
                         <td>?</td>
-                        <td>40</td>
-                        <td>12</td>
-                        <td>7</td>
-                        <td>10</td>
-                        <td>4</td>
-                        <td><span class="badge badge-success">12.1%</span></td>
+                        <td>93</td>
+                        <td>53</td>
+                        <td>18</td>
+                        <td>13</td>
+                        <td>9</td>
+                        <td><span class="badge badge-success">74.6%</span></td>
+                        <td><span class="badge badge-success">11.2%</span></td>
                     </tr>
                 </tbody>
             </table>
-
-            <h3>Analysis of Apparatus Cases in 2026Q1 & 2026Q2</h3>
-            <p>
-                In-depth investigation of the 4 apparatus cases in 2026Q1 and 2026Q2 revealed that they touch <code>pydantic-core/</code> workspace sub-packages whose test files require <code>hypothesis</code> (which is in <code>pydantic-core</code>'s own test group rather than Pydantic's <code>testing-extra</code>). Adding <code>hypothesis</code> to container packages resolves these remaining apparatus cases.
-            </p>
         </section>
 
         <section id="unit-tests">
@@ -364,7 +367,7 @@ PYTHONPATH=/work/aligned-core:$PYTHONPATH pytest ...</code></pre>
             </div>
             <ul>
                 <li><code>test_candidates.py</code>: verified <code>no_pytest_tests</code> pre-filtering on type-checking fixtures.</li>
-                <li><code>test_runner.py</code>: verified wheel download command formatting, offline target-dir alignment, and <code>ContainerLost</code> error handling.</li>
+                <li><code>test_runner.py</code>: verified wheel download command formatting, offline target-dir alignment, 300s timeout, and <code>ContainerLost</code> container restart handling.</li>
                 <li><code>test_adjudicate.py</code>: verified 100% pure verdict classification logic.</li>
             </ul>
         </section>
@@ -372,7 +375,7 @@ PYTHONPATH=/work/aligned-core:$PYTHONPATH pytest ...</code></pre>
         <section id="readiness">
             <h2>Readiness for Task 7 Full Sweep</h2>
             <p>
-                With wheel caching operational, <code>no_pytest_tests</code> pre-filtered in Stage 1, and the apparatus rate reduced to 12.1% (and 0% in 2025Q4/2026Q3), the miner infrastructure is fully unblocked for the Task 7 12-quarter sweep across the 1,568 candidates.
+                With wheel caching operational, <code>no_pytest_tests</code> pre-filtered in Stage 1, container recovery loops active, 53 validated capsules extracted across 2025Q4-2026Q3, and the apparatus rate reduced to 11.2% overall, the miner infrastructure is fully unblocked for the Task 7 full sweep across the 1,568 candidates.
             </p>
         </section>
 
