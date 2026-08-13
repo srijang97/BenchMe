@@ -120,7 +120,7 @@ RUN mkdir -p /opt/miner \\
  || ( ( {fallback} > /tmp/reqs.txt || {fallback_min} > /tmp/reqs.txt ) \\
       && echo {mode_unfrozen} > {mode_path} )
 RUN uv pip install --system -r /tmp/reqs.txt
-RUN uv pip install --system pytest hypothesis
+RUN uv pip install --system pytest hypothesis pytest-benchmark jsonschema
 RUN mkdir -p /opt/miner/wheels
 {wheels_download}
 WORKDIR /
