@@ -152,22 +152,37 @@ def detect_profile(anchor_worktree):
 
 # Written inside the image by the export step; read back after the build.
 EXPORT_MODE_PATH = "/opt/miner/export-mode"
+PROFILE_PATH = "/opt/miner/environment-profile"
 MODE_FROZEN = "frozen"
 MODE_UNFROZEN = "unfrozen"
+
+
+def _profile_probes_cmd(profile):
+    if not profile or not profile.profile_probes:
+        return ""
+    imports = "; ".join(f"import {mod}" for mod in profile.profile_probes)
+    return (
+        f'RUN python -c "{imports}" >/dev/null 2>&1 || ( \\\n'
+        f'      echo "FATAL: profile probes failed '
+        f'({", ".join(profile.profile_probes)} missing)"; \\\n'
+        f'      exit 1 )'
+    )
 
 # No `2>/dev/null` on the primary export: hiding its stderr means a build log
 # can never explain why the fallback fired.
 DOCKERFILE = """FROM {base}
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     git curl build-essential less && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir uv
+{tool_install}
 WORKDIR /src
 COPY . /src
 RUN mkdir -p /opt/miner \\
  && ( ( {export} > /tmp/reqs.txt || {export_min} > /tmp/reqs.txt ) \\
-      && echo {mode_frozen} > {mode_path} ) \\
+      && echo {mode_frozen} > {mode_path} \\
+      && echo {profile_name} > {profile_path} ) \\
  || ( ( {fallback} > /tmp/reqs.txt || {fallback_min} > /tmp/reqs.txt ) \\
-      && echo {mode_unfrozen} > {mode_path} )
+      && echo {mode_unfrozen} > {mode_path} \\
+      && echo {profile_name} > {profile_path} )
 RUN uv pip install --system -r /tmp/reqs.txt
 RUN uv pip install --system pytest hypothesis pytest-benchmark jsonschema
 RUN mkdir -p /opt/miner/wheels
@@ -197,6 +212,7 @@ RUN python -c "import pydantic_core" >/dev/null 2>&1 || ( \\
       echo "FATAL: pydantic_core is not importable after /src was removed;" \\
       echo "the export probably emitted it editable -- see --no-editable"; \\
       exit 1 )
+{profile_probes}
 # Docker creates a missing `-w` directory as root, which a non-root container
 # cannot write to. Each candidate's checkout lands here, so it must be owned
 # by the user the container actually runs as.
@@ -222,7 +238,7 @@ RUN git config --system --add safe.directory '*'
 #   skip     True when this is a real verdict about the quarter (nothing to
 #            mine), False when it is our apparatus that broke
 QuarterImage = namedtuple("QuarterImage",
-                          "tag reason anchor anchored skip")
+                          "tag reason anchor anchored skip profile")
 
 REASON_OK = "ok"
 REASON_NO_COMMITS = "no-commits-in-quarter"
@@ -327,7 +343,7 @@ def build_quarter_image(repo, quarter, log_dir):
     sha = None
     worktree_added = False
 
-    def finish(tag, reason, anchored=False, skip=False):
+    def finish(tag, reason, anchored=False, skip=False, profile=None):
         log.insert(0, f"quarter={quarter!r} anchor={sha} "
                       f"reason={reason} anchored={anchored} skip={skip}")
         # The quarter reaches this path unvalidated, so it cannot be trusted
@@ -342,7 +358,7 @@ def build_quarter_image(repo, quarter, log_dir):
         except OSError as exc:  # logging must never mask the real outcome
             print(f"warning: could not write build log: {exc}",
                   file=sys.stderr)
-        return QuarterImage(tag, reason, sha, anchored, skip)
+        return QuarterImage(tag, reason, sha, anchored, skip, profile)
 
     try:
         try:
@@ -372,16 +388,29 @@ def build_quarter_image(repo, quarter, log_dir):
             return finish(None, REASON_WORKTREE_FAILED)
         worktree_added = True
 
+        prof = detect_profile(work)
+        if prof is None:
+            has_uv = (work / UV_PROFILE.lockfile).exists()
+            has_pdm = (work / PDM_PROFILE.lockfile).exists()
+            reason = (REASON_AMBIGUOUS_LOCKFILE if has_uv and has_pdm
+                      else REASON_NO_LOCKFILE)
+            log.append(f"environment profile detection failed: {reason}")
+            return finish(None, reason)
+
         dockerfile = work / "Dockerfile.miner"
         dockerfile.write_text(
             DOCKERFILE.format(base=tierb.BASE_IMAGE,
-                              export=EXPORT_FROZEN,
-                              export_min=EXPORT_FROZEN_MIN,
-                              fallback=EXPORT_UNFROZEN,
-                              fallback_min=EXPORT_UNFROZEN_MIN,
+                              tool_install=prof.tool_install,
+                              export=prof.export_frozen,
+                              export_min=prof.export_frozen_min,
+                              fallback=prof.export_unfrozen,
+                              fallback_min=prof.export_unfrozen_min,
                               mode_frozen=MODE_FROZEN,
                               mode_unfrozen=MODE_UNFROZEN,
                               mode_path=EXPORT_MODE_PATH,
+                              profile_name=prof.name,
+                              profile_path=PROFILE_PATH,
+                              profile_probes=_profile_probes_cmd(prof),
                               user=tierb.DEFAULT_CONTAINER_USER,
                               wheels_download=_wheels_download_cmd(quarter)),
             encoding="utf-8")
@@ -415,7 +444,7 @@ def build_quarter_image(repo, quarter, log_dir):
                 "resolved fresh rather than pinned to the quarter's lockfile. "
                 "It is NOT anchored; results from it are about modern "
                 "dependencies, not the quarter's.")
-        return finish(tag, REASON_OK, anchored=anchored)
+        return finish(tag, REASON_OK, anchored=anchored, profile=prof.name)
     finally:
         # Always remove the worktree. A timeout or a missing docker binary
         # would otherwise leave a stale worktree that blocks the next attempt.

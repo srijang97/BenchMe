@@ -952,6 +952,41 @@ def test_detect_profile_returns_none_for_missing_or_ambiguous_lockfiles(tmp_path
     assert runner.quarters.detect_profile(ambig_dir) is None
 
 
+def test_quarter_image_includes_profile_metadata():
+    image = runner.quarters.QuarterImage(
+        "benchme-miner/pydantic:2026q3", "ok", "a" * 40, True, False,
+        "pdm_locked")
+    assert image.profile == "pdm_locked"
+
+
+def test_dockerfile_template_uses_profile_install_metadata_and_probes():
+    profile = runner.quarters.PDM_PROFILE
+    rendered = runner.quarters.DOCKERFILE.format(
+        base="python:3.12-slim",
+        tool_install=profile.tool_install,
+        export=profile.export_frozen,
+        export_min=profile.export_frozen_min,
+        fallback=profile.export_unfrozen,
+        fallback_min=profile.export_unfrozen_min,
+        mode_frozen=runner.quarters.MODE_FROZEN,
+        mode_unfrozen=runner.quarters.MODE_UNFROZEN,
+        mode_path=runner.quarters.EXPORT_MODE_PATH,
+        profile_name=profile.name,
+        profile_path=runner.quarters.PROFILE_PATH,
+        profile_probes=runner.quarters._profile_probes_cmd(profile),
+        user="1000:1000",
+        wheels_download="")
+
+    assert "RUN pip install --no-cache-dir pdm" in rendered
+    assert "pdm export -g testing -g testing-extra --no-self" in rendered
+    assert (
+        "echo pdm_locked > /opt/miner/environment-profile" in rendered
+    )
+    assert "import dirty_equals; import pytest_examples" in rendered
+    assert rendered.index("RUN rm -rf /src") < rendered.index(
+        "import dirty_equals; import pytest_examples")
+
+
 # --------------------------------------------------------------------------
 # Task 2: wheel caching and pin alignment tests
 # --------------------------------------------------------------------------
