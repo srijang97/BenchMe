@@ -234,14 +234,24 @@ def anchor_commit(repo, quarter):
     start_month = (q - 1) * 3 + 1
     end_year, end_month = (year, start_month + 3) if q < 4 else (year + 1, 1)
     proc = subprocess.run(
-        ["git", "log", "-1", "--format=%H",
+        ["git", "log", "--format=%H",
          f"--before={end_year}-{end_month:02d}-01",
          f"--after={year}-{start_month:02d}-01"],
         cwd=str(repo), capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(
             f"git log failed for {quarter} in {repo}: {proc.stderr.strip()}")
-    return proc.stdout.strip() or None
+    shas = [s for s in proc.stdout.strip().splitlines() if s]
+    if not shas:
+        return None
+    # Skip foreign project commits (e.g. pydantic-core commits grafted into repo log)
+    expected_name = candidates.EXPECTED_PROJECT.get(Path(repo).name, "pydantic")
+    tomls = candidates._read_pyprojects(repo, [(s, s) for s in shas])
+    for s in shas:
+        pname = candidates.project_name(tomls.get(f"{s}:pyproject.toml", ""))
+        if pname == expected_name or pname is None:
+            return s
+    return None
 
 
 def image_export_mode(tag):
