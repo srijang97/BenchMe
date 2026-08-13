@@ -114,3 +114,16 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+from runner import is_pdm_rerun_eligible
+
+
+def select_pdm_rerun_queue(all_candidates, done_records, quarters_set):
+    queue = []
+    for cand in all_candidates:
+        if cand.get("quarter") in quarters_set:
+            latest = done_records.get(cand["sha"])
+            if is_pdm_rerun_eligible(cand, latest):
+                queue.append(cand)
+    return queue
+

@@ -870,3 +870,14 @@ def _align_core_pin(container, workdir, cand_pin):
             f"a different version and the wheel cache could not align it "
             f"(rc={r.returncode}): {(r.stdout + r.stderr)[:200]}")
     return None
+
+def is_pdm_rerun_eligible(cand, latest_rec):
+    if not latest_rec:
+        return True
+    st = latest_rec.get("status", "")
+    if st == "error":
+        return True
+    if latest_rec.get("anchored") is False:
+        return True
+    return False
+

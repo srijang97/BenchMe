@@ -1187,3 +1187,45 @@ def test_validate_quarter_stamps_profile_in_written_records(monkeypatch, tmp_pat
     assert len(lines) == 1
     rec = json.loads(lines[0])
     assert rec["profile"] == "uv_locked"
+
+def test_pdm_rerun_queue_selector_logic():
+    import compare_rerun
+    cand_a = {'sha': 'sha1', 'quarter': '2023Q3'}
+
+    # 1. No existing record -> True
+    assert runner.is_pdm_rerun_eligible(cand_a, None) is True
+
+    # 2. Status error -> True
+    assert runner.is_pdm_rerun_eligible(cand_a, {'status': 'error', 'anchored': True}) is True
+
+    # 3. Entered container but anchored is False -> True
+    assert runner.is_pdm_rerun_eligible(cand_a, {'status': 'apparatus', 'anchored': False}) is True
+
+    # 4. Anchored is True -> False
+    assert runner.is_pdm_rerun_eligible(cand_a, {'status': 'validated', 'anchored': True}) is False
+    assert runner.is_pdm_rerun_eligible(cand_a, {'status': 'rejected:unchanged', 'anchored': True}) is False
+
+    # 5. Pre-Docker not-minable (anchored is None) -> False
+    assert runner.is_pdm_rerun_eligible(cand_a, {'status': 'not_minable:no_pytest_tests', 'anchored': None}) is False
+
+    # Test select_pdm_rerun_queue
+    all_cands = [
+        {'sha': 'sha_new', 'quarter': '2023Q3'},
+        {'sha': 'sha_err', 'quarter': '2023Q4'},
+        {'sha': 'sha_unanchored', 'quarter': '2024Q1'},
+        {'sha': 'sha_anchored', 'quarter': '2024Q1'},
+        {'sha': 'sha_not_minable', 'quarter': '2024Q2'},
+        {'sha': 'sha_wrong_quarter', 'quarter': '2025Q3'},
+    ]
+    done_recs = {
+        'sha_err': {'status': 'error', 'anchored': True},
+        'sha_unanchored': {'status': 'apparatus', 'anchored': False},
+        'sha_anchored': {'status': 'validated', 'anchored': True},
+        'sha_not_minable': {'status': 'not_minable:foreign_project', 'anchored': None},
+        'sha_wrong_quarter': {'status': 'error', 'anchored': False},
+    }
+    quarters_set = {'2023Q3', '2023Q4', '2024Q1', '2024Q2'}
+
+    queue = compare_rerun.select_pdm_rerun_queue(all_cands, done_recs, quarters_set)
+    shas = [c['sha'] for c in queue]
+    assert shas == ['sha_new', 'sha_err', 'sha_unanchored']
