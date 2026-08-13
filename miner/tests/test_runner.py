@@ -12,6 +12,7 @@ import json
 import sys
 from collections import namedtuple
 from pathlib import Path
+from typing import get_type_hints
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -959,7 +960,7 @@ def test_quarter_image_includes_profile_metadata():
     assert image.profile == "pdm_locked"
 
 
-def test_dockerfile_template_uses_profile_install_metadata_and_probes():
+def test_dockerfile_template_includes_profile_probes_and_profile_file():
     profile = runner.quarters.PDM_PROFILE
     rendered = runner.quarters.DOCKERFILE.format(
         base="python:3.12-slim",
@@ -977,7 +978,7 @@ def test_dockerfile_template_uses_profile_install_metadata_and_probes():
         user="1000:1000",
         wheels_download="")
 
-    assert "RUN pip install --no-cache-dir pdm" in rendered
+    assert "RUN pip install --no-cache-dir uv pdm" in rendered
     assert "pdm export -g testing -g testing-extra --no-self" in rendered
     assert (
         "echo pdm_locked > /opt/miner/environment-profile" in rendered
@@ -985,6 +986,13 @@ def test_dockerfile_template_uses_profile_install_metadata_and_probes():
     assert "import dirty_equals; import pytest_examples" in rendered
     assert rendered.index("RUN rm -rf /src") < rendered.index(
         "import dirty_equals; import pytest_examples")
+
+
+def test_profile_probes_cmd_has_explicit_type_contract():
+    assert get_type_hints(runner.quarters._profile_probes_cmd) == {
+        "profile": runner.quarters.EnvironmentProfile,
+        "return": str,
+    }
 
 
 # --------------------------------------------------------------------------

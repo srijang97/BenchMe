@@ -131,7 +131,7 @@ UV_PROFILE = EnvironmentProfile(
 PDM_PROFILE = EnvironmentProfile(
     name="pdm_locked",
     lockfile="pdm.lock",
-    tool_install="RUN pip install --no-cache-dir pdm",
+    tool_install="RUN pip install --no-cache-dir uv pdm",
     export_frozen="pdm export -g testing -g testing-extra --no-self",
     export_frozen_min="pdm export --no-self",
     export_unfrozen="pdm export -g testing -g testing-extra --no-self",
@@ -157,7 +157,7 @@ MODE_FROZEN = "frozen"
 MODE_UNFROZEN = "unfrozen"
 
 
-def _profile_probes_cmd(profile):
+def _profile_probes_cmd(profile: EnvironmentProfile) -> str:
     if not profile or not profile.profile_probes:
         return ""
     imports = "; ".join(f"import {mod}" for mod in profile.profile_probes)
