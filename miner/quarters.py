@@ -24,6 +24,7 @@ import subprocess
 import sys
 from collections import namedtuple
 from pathlib import Path
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "screener"))
 import candidates  # noqa: E402
@@ -100,6 +101,54 @@ EXPORT_FROZEN = tierb._EXPORT + " --no-editable" + _GROUPS
 EXPORT_FROZEN_MIN = tierb._EXPORT + " --no-editable"
 EXPORT_UNFROZEN = EXPORT_FROZEN.replace("--frozen ", "")
 EXPORT_UNFROZEN_MIN = EXPORT_FROZEN_MIN.replace("--frozen ", "")
+
+
+class EnvironmentProfile(NamedTuple):
+    name: str
+    lockfile: str
+    tool_install: str
+    export_frozen: str
+    export_frozen_min: str
+    export_unfrozen: str
+    export_unfrozen_min: str
+    profile_probes: tuple
+
+
+REASON_NO_LOCKFILE = "no-supported-lockfile"
+REASON_AMBIGUOUS_LOCKFILE = "ambiguous-lockfiles"
+
+UV_PROFILE = EnvironmentProfile(
+    name="uv_locked",
+    lockfile="uv.lock",
+    tool_install="RUN pip install --no-cache-dir uv",
+    export_frozen=EXPORT_FROZEN,
+    export_frozen_min=EXPORT_FROZEN_MIN,
+    export_unfrozen=EXPORT_UNFROZEN,
+    export_unfrozen_min=EXPORT_UNFROZEN_MIN,
+    profile_probes=(),
+)
+
+PDM_PROFILE = EnvironmentProfile(
+    name="pdm_locked",
+    lockfile="pdm.lock",
+    tool_install="RUN pip install --no-cache-dir pdm",
+    export_frozen="pdm export -g testing -g testing-extra --no-self",
+    export_frozen_min="pdm export --no-self",
+    export_unfrozen="pdm export -g testing -g testing-extra --no-self",
+    export_unfrozen_min="pdm export --no-self",
+    profile_probes=("dirty_equals", "pytest_examples"),
+)
+
+
+def detect_profile(anchor_worktree):
+    path = Path(anchor_worktree)
+    has_uv = (path / "uv.lock").exists()
+    has_pdm = (path / "pdm.lock").exists()
+    if has_uv and not has_pdm:
+        return UV_PROFILE
+    if has_pdm and not has_uv:
+        return PDM_PROFILE
+    return None
 
 # Written inside the image by the export step; read back after the build.
 EXPORT_MODE_PATH = "/opt/miner/export-mode"

@@ -919,6 +919,40 @@ def test_validate_quarter_image_skip_preserves_not_minable(monkeypatch, tmp_path
 
 
 # --------------------------------------------------------------------------
+# Task 1: locked environment profile detection
+# --------------------------------------------------------------------------
+
+def test_detect_profile_selects_uv_and_pdm(tmp_path):
+    uv_dir = tmp_path / "uv_anchor"
+    uv_dir.mkdir()
+    (uv_dir / "uv.lock").write_text("", encoding="utf-8")
+    prof = runner.quarters.detect_profile(uv_dir)
+    assert prof is not None
+    assert prof.name == "uv_locked"
+    assert prof.lockfile == "uv.lock"
+
+    pdm_dir = tmp_path / "pdm_anchor"
+    pdm_dir.mkdir()
+    (pdm_dir / "pdm.lock").write_text("", encoding="utf-8")
+    prof = runner.quarters.detect_profile(pdm_dir)
+    assert prof is not None
+    assert prof.name == "pdm_locked"
+    assert prof.lockfile == "pdm.lock"
+
+
+def test_detect_profile_returns_none_for_missing_or_ambiguous_lockfiles(tmp_path):
+    empty_dir = tmp_path / "empty_anchor"
+    empty_dir.mkdir()
+    assert runner.quarters.detect_profile(empty_dir) is None
+
+    ambig_dir = tmp_path / "ambig_anchor"
+    ambig_dir.mkdir()
+    (ambig_dir / "uv.lock").write_text("", encoding="utf-8")
+    (ambig_dir / "pdm.lock").write_text("", encoding="utf-8")
+    assert runner.quarters.detect_profile(ambig_dir) is None
+
+
+# --------------------------------------------------------------------------
 # Task 2: wheel caching and pin alignment tests
 # --------------------------------------------------------------------------
 
