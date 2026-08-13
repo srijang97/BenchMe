@@ -500,27 +500,31 @@ def install_reporter(container):
 
 
 def start_container(image, name):
+    import time
     subprocess.run(["docker", "rm", "-f", name], capture_output=True,
                    text=True, env=tierb.docker_env())
-    proc = subprocess.run(
-        ["docker", "run", "-d", "--name", name,
-         "--memory", MEM, "--memory-swap", MEM, "--cpus", CPUS,
-         "--pids-limit", PIDS, "--network", "none",
-         "--user", tierb.DEFAULT_CONTAINER_USER,
-         # A bare uid has no home directory in the image, so HOME=/ , which is
-         # not writable; anything wanting a cache (pytest, pip) fails there.
-         # Same redirection the screener's run_in uses, so the environment a
-         # candidate runs in matches the one the repo was screened green in.
-         "-e", "HOME=/tmp", "-e", "XDG_CACHE_HOME=/tmp/.cache",
-         # Read-only: the checkout is the source `_checkout` clones FROM, and
-         # nothing in stage 2 may write to the host's clone.
-         "-v", f"{tierb.host_path(Path(__file__).resolve().parents[1] / 'screener' / 'work' / 'pydantic')}:/repo:ro",
-         "-w", "/work", image, "sleep", "infinity"],
-        capture_output=True, text=True, env=tierb.docker_env())
-    return proc.stdout.strip() if proc.returncode == 0 else None
+    for _ in range(3):
+        proc = subprocess.run(
+            ["docker", "run", "-d", "--name", name,
+             "--memory", MEM, "--memory-swap", MEM, "--cpus", CPUS,
+             "--pids-limit", PIDS, "--network", "none",
+             "--user", tierb.DEFAULT_CONTAINER_USER,
+             "-e", "HOME=/tmp", "-e", "XDG_CACHE_HOME=/tmp/.cache",
+             "-v", f"{tierb.host_path(Path(__file__).resolve().parents[1] / 'screener' / 'work' / 'pydantic')}:/repo:ro",
+             "-w", "/work", image, "sleep", "infinity"],
+            capture_output=True, text=True, env=tierb.docker_env())
+        if proc.returncode == 0:
+            return proc.stdout.strip()
+        time.sleep(1)
+    return None
 
 
 def exec_in(container, argv, timeout=300):
+    if not container:
+        return subprocess.CompletedProcess(
+            args=["docker", "exec", "", *argv],
+            returncode=tierb.TIMEOUT_RETURNCODE,
+            stdout="", stderr="no container")
     """Run argv in the container. ALWAYS returns a CompletedProcess.
 
     On timeout the return code is `tierb.TIMEOUT_RETURNCODE` (-9), the
@@ -549,6 +553,8 @@ def exec_in(container, argv, timeout=300):
 
 
 def stop_container(container):
+    if not container:
+        return
     subprocess.run(["docker", "rm", "-f", container], capture_output=True,
                    text=True, env=tierb.docker_env())
 
