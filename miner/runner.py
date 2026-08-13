@@ -767,7 +767,10 @@ def validate_quarter(quarter, limit, keep_images, force):
                 if not cid:
                     print(f"  could not restart container for {quarter}")
                     break
-                quarters.install_reporter(cid)
+                err = quarters.install_reporter(cid)
+                if err:
+                    print(f"  could not reinstall reporter for {quarter}: {err}")
+                    break
 
         pass2_queue = list(survivors)
         while pass2_queue:
@@ -785,7 +788,10 @@ def validate_quarter(quarter, limit, keep_images, force):
                 if not cid:
                     print(f"  could not restart container for {quarter}")
                     break
-                quarters.install_reporter(cid)
+                err = quarters.install_reporter(cid)
+                if err:
+                    print(f"  could not reinstall reporter for {quarter}: {err}")
+                    break
     finally:
         quarters.stop_container(cid)
         if not keep_images:
